@@ -1,16 +1,11 @@
-import sys
 import os
-if __name__ == "__main__" and __package__ is None:
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    __package__ = "database"
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from . import models
 
+# 统一数据库路径为项目根目录下 app.db
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
-# 对于生产环境推荐使用PostgreSQL:
-# SQLALCHEMY_DATABASE_URL = "postgresql://user:password@localhost/dbname"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
@@ -24,7 +19,6 @@ def init_db():
     models.Base.metadata.create_all(bind=engine)
 
 def get_db():
-    """获取数据库会话的依赖函数"""
     db = SessionLocal()
     try:
         yield db

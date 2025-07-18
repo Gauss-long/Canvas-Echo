@@ -2,269 +2,275 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableWidget, QTableWidgetItem, QLabel, QMessageBox, QSplitter, QListWidget,
-    QTextEdit, QFileDialog, QAbstractItemView
+    QTableWidget, QTableWidgetItem, QLabel, QMessageBox, QDialog, QFormLayout,
+    QLineEdit, QDialogButtonBox, QAbstractItemView
 )
-from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
 from .db import get_db
-from .crud import get_user_by_username, get_user_sessions, get_session_messages, delete_session, create_user
-from .models import User
-from . import schemas
-import base64
+from .models import User, Session, Message
+from passlib.context import CryptContext
+
+# 密码加密上下文
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 class AdminApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("应用后台管理（PyQt版）")
-        self.resize(1200, 800)
+        self.setWindowTitle("账号管理系统")
+        self.resize(800, 600)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.layout = QHBoxLayout(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
 
-        # 左侧：用户列表
+        # 标题
+        title_label = QLabel("用户账号管理")
+        title_label.setStyleSheet("font-size: 24 font-weight: bold; margin: 20px;")
+        title_label.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(title_label)
+
+        # 用户列表表格
         self.user_table = QTableWidget()
-        self.user_table.setColumnCount(3)
-        self.user_table.setHorizontalHeaderLabels(["ID", "用户名", "注册时间"])
+        self.user_table.setColumnCount(4)
+        self.user_table.setHorizontalHeaderLabels(["ID", "用户名", "注册时间", "会话数量"])
         self.user_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.user_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.user_table.verticalHeader().setVisible(False)
-        self.user_table.setMinimumWidth(300)
-        self.user_table.itemSelectionChanged.connect(self.on_user_selected)
+        self.user_table.setAlternatingRowColors(True)
+        self.user_table.setStyleSheet("""
+            QTableWidget[object Object] {
+                gridline-color: #ddd;
+                background-color: white;
+                alternate-background-color: #f9f9f9;
+            }
+            QHeaderView::section[object Object] {
+                background-color: #f0f0f0;
+                padding: 8px;
+                border: 1px solid #ddd;
+                font-weight: bold;
+            }
+        """)
+        self.layout.addWidget(self.user_table)
 
-        # 用户操作按钮
-        self.add_user_btn = QPushButton("注册用户")
-        self.del_user_btn = QPushButton("删除用户")
+        # 操作按钮区域
+        button_layout = QHBoxLayout()
+
+        self.add_user_btn = QPushButton("添加用户")
+        self.add_user_btn.setStyleSheet("""
+            QPushButton[object Object] {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover[object Object] {
+                background-color: #45a049;
+            }
+        """)
         self.add_user_btn.clicked.connect(self.register_user)
+
+        self.del_user_btn = QPushButton("删除用户")
+        self.del_user_btn.setStyleSheet("""
+            QPushButton[object Object] {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover[object Object] {
+                background-color: #da190b;
+            }
+        """)
         self.del_user_btn.clicked.connect(self.delete_selected_user)
-        user_btn_layout = QHBoxLayout()
-        user_btn_layout.addWidget(self.add_user_btn)
-        user_btn_layout.addWidget(self.del_user_btn)
-        user_left_layout = QVBoxLayout()
-        user_left_layout.addWidget(self.user_table)
-        user_left_layout.addLayout(user_btn_layout)
-        user_left_widget = QWidget()
-        user_left_widget.setLayout(user_left_layout)
 
-        # 中间：会话列表
-        self.session_list = QListWidget()
-        self.session_list.setMinimumWidth(250)
-        self.session_list.itemSelectionChanged.connect(self.on_session_selected)
-        self.session_label = QLabel("会话列表")
-        session_layout = QVBoxLayout()
-        session_layout.addWidget(self.session_label)
-        session_layout.addWidget(self.session_list)
-        session_widget = QWidget()
-        session_widget.setLayout(session_layout)
+        self.refresh_btn = QPushButton("刷新列表")
+        self.refresh_btn.setStyleSheet("""
+            QPushButton[object Object] {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover[object Object] {
+                background-color: #1976D2;
+            }
+        """)
+        self.refresh_btn.clicked.connect(self.load_all_users)
 
-        # 右侧：消息详情
-        self.message_list = QListWidget()
-        self.message_list.setMinimumWidth(400)
-        self.message_list.itemSelectionChanged.connect(self.on_message_selected)
-        self.message_label = QLabel("消息详情")
-        self.message_content = QTextEdit()
-        self.message_content.setReadOnly(True)
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setVisible(False)
-        msg_layout = QVBoxLayout()
-        msg_layout.addWidget(self.message_label)
-        msg_layout.addWidget(self.message_list)
-        msg_layout.addWidget(self.message_content)
-        msg_layout.addWidget(self.image_label)
-        msg_widget = QWidget()
-        msg_widget.setLayout(msg_layout)
+        button_layout.addWidget(self.add_user_btn)
+        button_layout.addWidget(self.del_user_btn)
+        button_layout.addWidget(self.refresh_btn)
+        button_layout.addStretch()  # 添加弹性空间
 
-        # 主分割区
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(user_left_widget)
-        splitter.addWidget(session_widget)
-        splitter.addWidget(msg_widget)
-        self.layout.addWidget(splitter)
+        self.layout.addLayout(button_layout)
 
-        # 数据状态
-        self.selected_user_id = None
-        self.selected_session_id = None
-        self.selected_message_id = None
+        # 状态栏
+        self.status_label = QLabel("就绪")
+        self.status_label.setStyleSheet("color: #666; padding: 10px;")
+        self.layout.addWidget(self.status_label)
 
+        # 加载用户数据
         self.load_all_users()
 
     def load_all_users(self):
-        db = next(get_db())
-        users = db.query(User).all()
-        self.user_table.setRowCount(len(users))
-        for row, user in enumerate(users):
-            self.user_table.setItem(row, 0, QTableWidgetItem(str(user.id)))
-            self.user_table.setItem(row, 1, QTableWidgetItem(user.username))
-            self.user_table.setItem(row, 2, QTableWidgetItem(user.created_at.strftime("%Y-%m-%d %H:%M:%S")))
-        self.user_table.clearSelection()
-        self.session_list.clear()
-        self.message_list.clear()
-        self.message_content.clear()
-        self.image_label.clear()
-        self.image_label.setVisible(False)
-        self.selected_user_id = None
-        self.selected_session_id = None
-        self.selected_message_id = None
+        """加载所有用户"""
+        try:
+            db = next(get_db())
+            users = db.query(User).all()
 
-    def on_user_selected(self):
-        selected = self.user_table.selectedItems()
-        if not selected:
-            self.session_list.clear()
-            self.message_list.clear()
-            self.message_content.clear()
-            self.image_label.clear()
-            self.image_label.setVisible(False)
-            self.selected_user_id = None
-            return
-        user_id = int(self.user_table.item(selected[0].row(), 0).text())
-        self.selected_user_id = user_id
-        self.load_sessions(user_id)
+            self.user_table.setRowCount(len(users))
+            for row, user in enumerate(users):
+                # 获取用户的会话数量
+                session_count = db.query(Session).filter(Session.user_id == user.id).count()
 
-    def load_sessions(self, user_id):
-        db = next(get_db())
-        sessions = get_user_sessions(db, user_id)
-        self.session_list.clear()
-        for session in sessions:
-            self.session_list.addItem(f"{session.id} | {session.title} | {session.created_at.strftime('%Y-%m-%d %H:%M')}")
-        self.message_list.clear()
-        self.message_content.clear()
-        self.image_label.clear()
-        self.image_label.setVisible(False)
-        self.selected_session_id = None
-        self.selected_message_id = None
+                self.user_table.setItem(row, 0, QTableWidgetItem(str(user.id)))
+                self.user_table.setItem(row, 1, QTableWidgetItem(user.username))
+                self.user_table.setItem(row, 2, QTableWidgetItem(user.created_at.strftime("%Y-%m-%d %H:%M:%S")))
+                self.user_table.setItem(row, 3, QTableWidgetItem(str(session_count)))
 
-    def on_session_selected(self):
-        selected = self.session_list.currentItem()
-        if not selected:
-            self.message_list.clear()
-            self.message_content.clear()
-            self.image_label.clear()
-            self.image_label.setVisible(False)
-            self.selected_session_id = None
-            return
-        session_id = int(selected.text().split("|")[0].strip())
-        self.selected_session_id = session_id
-        self.load_messages(session_id)
+            self.user_table.clearSelection()
+            self.status_label.setText(f"已加载 {len(users)} 个用户")
 
-    def load_messages(self, session_id):
-        db = next(get_db())
-        messages = get_session_messages(db, session_id)
-        self.message_list.clear()
-        for msg in messages:
-            label = f"{msg.id} | {msg.role} | {msg.timestamp.strftime('%H:%M:%S')}"
-            self.message_list.addItem(label)
-        self.message_content.clear()
-        self.image_label.clear()
-        self.image_label.setVisible(False)
-        self.selected_message_id = None
-
-    def on_message_selected(self):
-        selected = self.message_list.currentItem()
-        if not selected:
-            self.message_content.clear()
-            self.image_label.clear()
-            self.image_label.setVisible(False)
-            self.selected_message_id = None
-            return
-        msg_id = int(selected.text().split("|")[0].strip())
-        self.selected_message_id = msg_id
-        self.show_message_detail(msg_id)
-
-    def show_message_detail(self, msg_id):
-        db = next(get_db())
-        session_id = self.selected_session_id
-        messages = get_session_messages(db, session_id)
-        msg = next((m for m in messages if m.id == msg_id), None)
-        if not msg:
-            self.message_content.clear()
-            self.image_label.clear()
-            self.image_label.setVisible(False)
-            return
-        if msg.content_type == "image":
-            # 解析base64图片
-            if msg.content.startswith("[图片:") and msg.content.endswith("]"):
-                parts = msg.content[4:-1].split(":", 1)
-                if len(parts) == 2:
-                    filename, encoded_string = parts
-                    try:
-                        image_data = base64.b64decode(encoded_string)
-                        image = QImage.fromData(image_data)
-                        pixmap = QPixmap.fromImage(image)
-                        self.image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio))
-                        self.image_label.setVisible(True)
-                        self.message_content.setText(f"图片: {filename}")
-                    except Exception as e:
-                        self.image_label.clear()
-                        self.image_label.setVisible(False)
-                        self.message_content.setText("图片解析失败")
-                else:
-                    self.image_label.clear()
-                    self.image_label.setVisible(False)
-                    self.message_content.setText("图片格式错误")
-            else:
-                self.image_label.clear()
-                self.image_label.setVisible(False)
-                self.message_content.setText("图片内容格式不正确")
-        else:
-            self.image_label.clear()
-            self.image_label.setVisible(False)
-            self.message_content.setText(msg.content)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"加载用户数据失败: {str(e)}")
+            self.status_label.setText("加载失败")
 
     def register_user(self):
-        from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox
+        """用户"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("注册用户")
+        dialog.setWindowTitle("添加新用户")
+        dialog.setFixedSize(400, 200)
         layout = QFormLayout(dialog)
+
         username_edit = QLineEdit()
+        username_edit.setPlaceholderText("请输入用户名")
         password_edit = QLineEdit()
+        password_edit.setPlaceholderText("请输入密码")
         password_edit.setEchoMode(QLineEdit.Password)
+        confirm_password_edit = QLineEdit()
+        confirm_password_edit.setPlaceholderText("请确认密码")
+        confirm_password_edit.setEchoMode(QLineEdit.Password)
+
         layout.addRow("用户名:", username_edit)
         layout.addRow("密码:", password_edit)
+        layout.addRow("确认密码:", confirm_password_edit)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         layout.addWidget(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
+
         if dialog.exec_() == QDialog.Accepted:
             username = username_edit.text().strip()
             password = password_edit.text().strip()
+            confirm_password = confirm_password_edit.text().strip()
+
+            # 验证输入
             if not username or not password:
                 QMessageBox.warning(self, "输入错误", "用户名和密码不能为空")
                 return
-            db = next(get_db())
-            if get_user_by_username(db, username):
-                QMessageBox.warning(self, "注册失败", "用户名已存在")
+
+            if password != confirm_password:
+                QMessageBox.warning(self, "输入错误", "两次输入的密码不一致")
                 return
-            user_data = schemas.UserCreate(username=username, password=password)
-            create_user(db, user_data)
-            QMessageBox.information(self, "注册成功", "用户注册成功")
-            self.load_all_users()
+
+            if len(password) < 6:
+                QMessageBox.warning(self, "输入错误", "密码长度不能少于6位")
+                return
+
+            try:
+                db = next(get_db())
+                # 检查用户名是否已存在
+                existing_user = db.query(User).filter(User.username == username).first()
+                if existing_user:
+                    QMessageBox.warning(self, "注册失败", "用户名已存在")
+                    return
+
+                # 创建新用户
+                hashed_password = get_password_hash(password)
+                new_user = User(username=username, password_hash=hashed_password)
+                db.add(new_user)
+                db.commit()
+                db.refresh(new_user)
+
+                QMessageBox.information(self, "成功", f"用户 '{username}' 创建成功")
+                self.load_all_users()
+
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"创建用户失败: {str(e)}")
 
     def delete_selected_user(self):
+        """删除选中的用户"""
         selected = self.user_table.selectedItems()
         if not selected:
             QMessageBox.warning(self, "删除用户", "请先选择一个用户")
             return
+
         user_id = int(self.user_table.item(selected[0].row(), 0).text())
-        reply = QMessageBox.question(self, "确认删除", f"确定要删除用户ID {user_id} 吗？该用户所有会话和消息也会被删除。", QMessageBox.Yes | QMessageBox.No)
+        username = self.user_table.item(selected[0].row(), 1).text()
+        session_count = int(self.user_table.item(selected[0].row(), 3).text())
+
+        # 确认删除
+        message = f"确定要删除用户 '{username}' 吗？\n\n"
+        message += f"用户ID: {user_id}\n"
+        message += f"会话数量: {session_count}\n\n"
+        message += "删除后，该用户的所有会话和消息也将被永久删除！"
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No  # 默认选择"否"
+        )
+
         if reply == QMessageBox.Yes:
-            db = next(get_db())
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                sessions = get_user_sessions(db, user_id)
+            try:
+                db = next(get_db())
+                user = db.query(User).filter(User.id == user_id).first()
+
+                if not user:
+                    QMessageBox.critical(self, "错误", f"未找到用户 ID 为 {user_id} 的用户")
+                    return
+
+                # 删除用户的所有会话（消息会通过级联删除自动删除）
+                sessions = db.query(Session).filter(Session.user_id == user_id).all()
+                session_count = len(sessions)
+
                 for session in sessions:
-                    session_id = getattr(session, 'id', None)
-                    if session_id is not None and isinstance(session_id, int):
-                        delete_session(db, session_id)
+                    db.delete(session)
+
+                # 删除用户
                 db.delete(user)
                 db.commit()
-                QMessageBox.information(self, "成功", f"已删除用户 ID 为 {user_id} 的用户")
-            else:
-                QMessageBox.critical(self, "错误", f"未找到用户 ID 为 {user_id} 的用户")
-            self.load_all_users()
+
+                QMessageBox.information(
+                    self,
+                    "删除成功",
+                    f"已删除用户 '{username}'\n"
+                    f"同时删除了 {session_count} 个会话及其所有消息"
+                )
+
+                self.load_all_users()
+
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"删除用户失败: {str(e)}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle('Fusion') # 使用现代风格
+
     window = AdminApp()
     window.show()
+
     sys.exit(app.exec_()) 

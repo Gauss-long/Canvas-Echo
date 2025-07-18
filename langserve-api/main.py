@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from fastapi import FastAPI
+from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
@@ -12,6 +13,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import crud, db as db_module
 from sqlalchemy.orm import Session
+from database import function as db_func  # 新增：引入 function.py
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -35,6 +37,27 @@ class ChatRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+class MessageRequest(BaseModel):
+    session_id: int
+    content: str
+    role: str
+    image: str
+class MessagePairRequest(BaseModel):
+    session_id1: int
+    content1: str
+    role1: str
+    image1: str   
+    session_id2: int
+    content2: str
+    role2: str
+    image2: str 
+
+class CreateSessionRequest(BaseModel):
+    user_id: int
+    title: str = "新对话"
+class DeleteSessionRequest(BaseModel):
+    session_id: int
 
 async def generate_response(content: str):
     """生成模拟的AI回复"""
@@ -83,12 +106,64 @@ async def chat_reason(request: ChatRequest):
     )
 
 @app.post("/db/login")
-def db_login(request: LoginRequest, db: Session = Depends(db_module.get_db)):
-    user = crud.authenticate_user(db, request.username, request.password)
+def db_login(request: LoginRequest):
+    user = db_func.login_user(request.username, request.password)
     if user:
-        return {"success": True, "username": user.username}
+        return {"success": True, "username": user.username, "user_id": user.id}
     else:
         return {"success": False, "message": "用户名或密码错误"}
+
+@app.get("/db/history")
+def db_history(username: str = Query(...)):
+    sessions = db_func.get_user_history(username)
+    if sessions is None:
+        return {"success": False, "message": "用户不存在"}
+    return {"success": True, "sessions": sessions}
+
+
+@app.post("/db/create_session")
+def create_session_api(request: CreateSessionRequest):
+    session = db_func.create_session(request.user_id, request.title)
+    if session:
+        return {"success": True, "session_id": session.id,"user_id": session.user_id,"title": session.title,
+        "created_at": session.created_at,"messages":[]}
+    else:
+        return {"success": False, "message": "创建会话失败"}
+
+@app.delete("/db/delete_session")
+def delete_session_api(req: DeleteSessionRequest):
+    db_func.delete_session(req.session_id)
+    return {"success": True}
+
+@app.post("/db/create_message")
+def create_message_api(req: MessageRequest):
+    db_func.create_message(
+        req.session_id,
+        req.content,
+        req.role,
+        req.image
+    )
+    return {"success": True}
+@app.post("/db/create_message_pair")
+def create_message_pair_api(req: MessagePairRequest):
+    db_func.create_message(
+        req.session_id1,
+        req.content1,
+        req.role1,
+        req.image1
+    )
+    db_func.create_message(
+        req.session_id2,
+        req.content2,
+        req.role2,
+        req.image2
+    )
+    return {"success": True}
+
+@app.get("/db/get_max_message_id")
+def get_max_message_id_api():
+    max_id = db_func.get_max_message_id()
+    return {"success": True, "max_id": max_id}
 
 @app.get("/")
 async def root():

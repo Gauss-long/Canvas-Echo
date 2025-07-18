@@ -5,6 +5,7 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "database"
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
 class UserBase(BaseModel):
     username: str
@@ -36,7 +37,8 @@ class Session(SessionBase):
 class MessageBase(BaseModel):
     content: str
     role: str
-    content_type: str = "text"  #内容类型
+    image: str = ""
+    timestamp: datetime
 
 class MessageCreate(MessageBase):
     pass

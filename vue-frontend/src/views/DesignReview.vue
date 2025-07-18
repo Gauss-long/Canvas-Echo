@@ -44,7 +44,7 @@
           >
             <div class="session-info">
               {{ session.title || `对话 ${index + 1}` }}
-              <span class="date">{{ formatDate(session.date) }}</span>
+              <span class="date">{{ formatDate(session.created_at) }}</span>
             </div>
             <!-- 修改删除按钮文字 -->
             <button @click.stop="deleteSession(index)" class="delete-btn">删除</button> 
@@ -72,6 +72,8 @@
               <div v-html="msg.content"></div>
               
               <!-- 模型回复操作区 -->
+              <!-- 删除 assistant 消息下的重新生成按钮 -->
+              <!--
               <div v-if="msg.role === 'assistant'" class="message-actions">
                 <button @click="regenerateResponse(index)" class="action-btn">
                   🔄 重新生成
@@ -87,6 +89,7 @@
                   </span>
                 </div>
               </div>
+              -->
             </div>
           </div>
         </div>
@@ -142,17 +145,20 @@
 
   // 类型定义
   interface Message {
-    role: 'user' | 'assistant'
+    id: number  // 支持字符串（前端临时）和数字（数据库ID）
+    session_id: number
     content: string
-    image?: string
-    rating?: number
+    image: string
+    role: string
+    timestamp: Date
   }
 
-  interface ChatSession {
-    id: string
-    title: string
-    date: Date
-    messages: Message[]
+  interface Session {
+    id:number
+    user_id:number
+    title:string
+    created_at:Date
+    messages:Message[]
   }
 
   // 响应式数据
@@ -165,12 +171,13 @@
   const phoneNumber = ref('')
 
   // 聊天会话数据
-  const historySessions = ref<ChatSession[]>([])
-  const currentSessionId = ref('')
-  const currentSession = ref<ChatSession>({
-    id: 'session-' + Date.now(),
+  const historySessions = ref<Session[]>([])
+  const currentSessionId = ref<number>()
+  const currentSession = ref<Session>({
+    id: 0,
+    user_id: 0,
     title: '新对话',
-    date: new Date(),
+    created_at: new Date(),
     messages: []
   })
 
@@ -187,15 +194,21 @@
     }
   })
 
+  const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = (error) => reject(error)
+    reader.readAsDataURL(file)
+  })
+}
+
+
   // 初始化
-  onMounted(() => {
-    // 从本地存储加载历史对话
-    const savedSessions = localStorage.getItem('designReviewSessions')
-    if (savedSessions) {
-      historySessions.value = JSON.parse(savedSessions)
-      // 对历史对话按日期降序排序（最近的在前面）
-      historySessions.value.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    }
+  onMounted(async () => {
+    // 清空本地历史会话缓存和账号信息，保证每次都需重新登录
+    localStorage.removeItem('designReviewSessions')
+    localStorage.removeItem('designReviewLogin')
     
     // 检查登录状态
     const savedLogin = localStorage.getItem('designReviewLogin')
@@ -205,25 +218,173 @@
       phoneNumber.value = phone
     }
     
-    // 创建新会话
-    startNewChat()
+    // 如果已登录，从数据库加载历史对话
+    if (userStore.isLoggedIn && userStore.username) {
+      await loadHistoryFromDatabase()
+      currentSession.value = historySessions.value[historySessions.value.length - 1]
+    }
 
     if (!userStore.isLoggedIn) {
       showLoginModal.value = true
     }
   })
 
+  // 新增：从数据库加载历史对话
+  const loadHistoryFromDatabase = async () => {
+    try {
+      const response = await fetch(`/db/history?username=${userStore.username}`)
+      const data = await response.json()
+      if (data.success && data.sessions) {
+        historySessions.value = data.sessions.map((session: any) => ({
+          id: session.id,
+          user_id: session.user_id,
+          title: session.title,
+          created_at: new Date(session.created_at),
+          messages: session.messages.map((msg: any) => ({
+            id: msg.id,
+            session_id: msg.session_id,
+            content: msg.content,
+            image: msg.image,
+            role: msg.role,
+            timestamp: new Date(msg.timestamp)
+          }))
+        }))
+      }
+    } catch (error) {
+      console.error('加载历史对话失败:', error)
+    }
+  }
+  
+  const addMessage = (message: Message) => {
+    currentSession.value.messages.push(message)
+    saveSessions()
+    
+    // 滚动到底部
+    nextTick(() => {
+      if (messagesContainer.value) {
+        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      }
+    })
+  }
+
+
+  const startNewChat = async () => {
+    // 保存当前会话
+    if (currentSession.value.messages.length > 0) {
+      historySessions.value.push({...currentSession.value})
+      // 对历史对话按日期降序排序（最近的在前面）
+      historySessions.value.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    }
+    
+    // 创建新会话
+    const newSession = await createSession("新会话");
+    if (newSession) {
+      currentSessionId.value = newSession.id;
+      currentSession.value = {
+        id: newSession.id,
+        user_id: newSession.user_id,
+        title: newSession.title,
+        created_at: newSession.created_at,
+        messages: newSession.messages
+      }
+    } else {
+      console.error('创建新会话失败')
+    }
+    
+    uploadedImage.value = null
+    saveSessions()
+
+    // 添加默认开头消息
+    addMessage({
+      id: 0,
+      session_id: currentSession.value.id,
+      content: '您好！请问您有什么设计需求?',
+      image: '',
+      role: 'assistant',
+      timestamp: new Date()
+    })
+    
+  }
+
+
+  // 新增：创建数据库会话
+  const createSession = async (title: string): Promise<Session | null> => {
+    if (!userStore.isLoggedIn || !userStore.userId) {
+      return null
+    }
+    
+    try {
+      const response = await fetch('/db/create_session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userStore.userId,
+          title: title
+        })
+      })
+      const data = await response.json()
+      if (data.success) {
+        const session: Session = {
+          id: data.session_id,
+          user_id: data.user_id,
+          title: data.title,
+          created_at: new Date(data.created_at), // 👈 注意要转成 Date 对象
+          messages: data.messages // 如果 messages 是 JSON 数组，也要确保结构正确
+        }
+        return session
+      }
+    } catch (error) {
+      console.error('创建会话失败:', error)
+    }
+    return null
+  }
+
+  const saveSessions = () => {
+    // 保存到本地存储
+    localStorage.setItem('designReviewSessions', JSON.stringify([
+      ...historySessions.value,
+      {...currentSession.value}
+    ]))
+}
+
+
   // 删除对话方法
-  const deleteSession = (index: number) => {
+  const deleteSession = async (index: number) => {
     // 使用 confirm 方法弹出确认对话框
     const isConfirmed = confirm('你确定要删除这个对话吗？');
     if (isConfirmed) {
-      historySessions.value.splice(index, 1);
-      saveSessions();
+      // 1. 先获取要删除的会话信息（在删除前保存）
+      const sessionToDelete = historySessions.value[index];
+      const sessionId = sessionToDelete.id;
+      const isCurrentSession = currentSessionId.value === sessionId;
       
-      // 如果删除的是当前会话，开始新对话
-      if (currentSessionId.value === historySessions.value[index]?.id) {
-        startNewChat();
+      // 2. 先尝试删除数据库中的会话
+      try {
+        const response = await fetch('/db/delete_session', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        const data = await response.json();
+        
+        if (!data.success) {
+          console.error('删除会话失败:', data.message);
+          return; // 数据库删除失败，不继续执行
+        }
+        
+        // 3. 数据库删除成功后，再更新前端状态
+        historySessions.value.splice(index, 1);
+        saveSessions();
+        
+        // 4. 如果删除的是当前会话，开始新对话
+        if (isCurrentSession) {
+          startNewChat();
+        }
+        
+      } catch (error) {
+        console.error('删除会话请求失败:', error);
+        // 网络错误时可以选择是否回滚前端状态
+        // 这里选择不回滚，让用户知道删除失败
       }
     }
   };
@@ -258,70 +419,86 @@
     }
   }
 
-  const addMessage = (message: Message) => {
-    currentSession.value.messages.push(message)
-    saveSessions()
-    
-    // 滚动到底部
-    nextTick(() => {
-      if (messagesContainer.value) {
-        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-      }
-    })
-  }
+
 
   const sendMessage = async () => {
-    if (!userInput.value.trim() && !uploadedImage.value) return
-    let imageUrl = null
-    if (uploadedImage.value) {
-      // 生成图片的base64用于发送
-      const reader = new FileReader()
-      imageUrl = await new Promise<string>((resolve) => {
-        reader.onload = (e) => {
-          resolve(e.target?.result as string)
-        }
-        reader.readAsDataURL(uploadedImage.value as File)
-      })
-    }
-    // 添加用户消息，包含文字和图片
-    addMessage({
-      role: 'user',
-      content: userInput.value,
-      ...(imageUrl ? { image: imageUrl } : {})
-    })
-    // 如果是新对话的第一条消息，设置对话标题
-    if (currentSession.value.messages.length === 1) {
-      const keywords = userInput.value.trim().split(' ')[0].slice(0, 20);
-      currentSession.value.title = keywords;
-      saveSessions();
-    }
-    // 清空输入和图片
-    const inputText = userInput.value
-    userInput.value = ''
-    uploadedImage.value = null
-    // 模拟AI响应
-    simulateAIResponse(inputText)
-    // 如果有图片，也可以在这里调用 analyzeDesign(imageUrl)
-    // if (imageUrl) {
-    //   analyzeDesign(imageUrl)
-    // }
+  if (!userInput.value.trim() && !uploadedImage.value) return
+
+  // 1. 生成图片 base64
+  let imageUrl = null
+  if (uploadedImage.value) {
+    imageUrl = await fileToBase64(uploadedImage.value)
   }
 
-  const simulateAIResponse = async (userMessage: string) => {
-    addMessage({
-      role: 'assistant',
-      content: '<div class="loading">分析中...</div>'
-    })
+  const max_id = await fetch('/db/get_max_message_id')
+  const data = await max_id.json()
+  const max_id_value = data.max_id
 
+  // 2. 本地插入用户消息
+  const userMsg = {
+    id: max_id_value + 1,
+    session_id: currentSession.value.id,
+    content: userInput.value,
+    image: imageUrl || '',
+    role: 'user',
+    timestamp: new Date()
+  }
+  addMessage(userMsg)
+
+  // 3. 清空输入
+  const inputText = userInput.value
+  userInput.value = ''
+  uploadedImage.value = null
+
+  // 4. 获取AI回复
+  const aiContent = await getAIResponse(inputText)
+  const aiMsg = {
+    id: max_id_value + 2,
+    session_id: currentSession.value.id,
+    content: aiContent,
+    image: '', // 如有AI图片可补充
+    role: 'assistant',
+    timestamp: new Date()
+  }
+  addMessage(aiMsg)
+
+  // 5. 写入数据库
+  if (userStore.isLoggedIn && typeof currentSession.value.id === 'number') {
     try {
-      const response = await fetch('http://localhost:3000/api/chat', {
+      const response = await fetch('/db/create_message_pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id1: currentSession.value.id,
+          content1: userMsg.content,
+          role1: userMsg.role,
+          image1: userMsg.image,
+          session_id2: currentSession.value.id,
+          content2: aiMsg.content,
+          role2: aiMsg.role,
+          image2: aiMsg.image
+        })
+      })
+      const data = await response.json()
+      if (!data.success) {
+        console.error('写入数据库失败:', data.message)
+      }
+    } catch (error) {
+      console.error('写入数据库请求失败:', error)
+    }
+  }
+}
+
+  // 新增：获取AI回复的函数
+  const getAIResponse = async (userMessage: string) => {
+    let aiText = ''
+    try {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: userMessage })
       })
-      // 处理流式响应
       const reader = response.body?.getReader()
-      let aiText = ''
       if (reader) {
         let decoder = new TextDecoder('utf-8')
         let done = false
@@ -330,169 +507,44 @@
           done = doneReading
           if (value) {
             aiText += decoder.decode(value, { stream: true })
-            // 实时更新内容
-            currentSession.value.messages[currentSession.value.messages.length - 1].content = aiText
           }
         }
       } else {
         aiText = await response.text()
-        currentSession.value.messages[currentSession.value.messages.length - 1].content = aiText
       }
     } catch (e) {
-      currentSession.value.messages.pop()
-      addMessage({
-        role: 'assistant',
-        content: '请求失败，请稍后重试'
-      })
+      aiText = '请求失败，请稍后重试'
     }
+    return aiText
   }
 
-  const generateDesignFeedback = (userMessage: string) => {
-    // 这里生成设计评审反馈 - 实际应用中应调用API
-    return `
-      <div class="design-feedback">
-        <h3>设计评审反馈</h3>
-        <p>基于您上传的设计稿和描述"${userMessage}"，以下是我的专业分析：</p>
-        
-        <div class="feedback-section">
-          <h4>布局分析：</h4>
-          <p>整体布局合理，视觉层次清晰。建议在顶部导航区域增加10px的内边距以提升可读性。</p>
-        </div>
-        
-        <div class="feedback-section">
-          <h4>色彩搭配：</h4>
-          <p>主色调协调，但对比度可进一步提升。建议将按钮颜色从 #4CAF50 调整为 #388E3C 以增强可访问性。</p>
-        </div>
-        
-        <div class="feedback-section">
-          <h4>可用性建议：</h4>
-          <p>表单字段标签应更明显，考虑增加字体重量或使用更深的灰色（#555）。</p>
-        </div>
-        
-        <div class="feedback-section">
-          <h4>一致性检查：</h4>
-          <p>图标风格统一，但按钮圆角半径存在不一致（4px vs 6px）。</p>
-        </div>
-      </div>
-    `
-  }
 
-  // analyzeDesign 也改为请求后端（如需图片分析可自定义接口）
-  const analyzeDesign = async (imageUrl: string) => {
-    addMessage({
-      role: 'assistant',
-      content: '<div class="loading">正在分析设计稿...</div>'
-    })
-    try {
-      const response = await fetch('http://localhost:3000/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: '图片分析:' + imageUrl })
-      })
-      const reader = response.body?.getReader()
-      let aiText = ''
-      if (reader) {
-        let decoder = new TextDecoder('utf-8')
-        let done = false
-        while (!done) {
-          const { value, done: doneReading } = await reader.read()
-          done = doneReading
-          if (value) {
-            aiText += decoder.decode(value, { stream: true })
-            currentSession.value.messages[currentSession.value.messages.length - 1].content = aiText
-          }
-        }
-      } else {
-        aiText = await response.text()
-        currentSession.value.messages[currentSession.value.messages.length - 1].content = aiText
-      }
-    } catch (e) {
-      currentSession.value.messages.pop()
-      addMessage({
-        role: 'assistant',
-        content: '图片分析请求失败，请稍后重试'
-      })
-    }
-  }
-
-  const startNewChat = () => {
-    // 保存当前会话
-    if (currentSession.value.messages.length > 0) {
-      historySessions.value.push({...currentSession.value})
-      // 对历史对话按日期降序排序（最近的在前面）
-      historySessions.value.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    }
-    
-    // 创建新会话
-    currentSessionId.value = 'session-' + Date.now()
-    currentSession.value = {
-      id: currentSessionId.value,
-      title: '新对话',
-      date: new Date(),
-      messages: []
-    }
-    
-    uploadedImage.value = null
-    saveSessions()
-
-    // 添加默认开头消息
-    addMessage({
-      role: 'assistant',
-      content: '您好！请问您有什么设计需求?'
-    })
-  }
-
-  const loadSession = (sessionId: string) => {
+  const loadSession = (sessionId: string | number) => {
     const session = historySessions.value.find(s => s.id === sessionId)
     if (session) {
-      currentSessionId.value = sessionId
-      currentSession.value = {...session}
+      currentSessionId.value = Number(sessionId)
+      currentSession.value = { ...session }
+    }
+    else{
+      console.error('加载会话失败:', sessionId)
     }
   }
 
-  const regenerateResponse = (index: number) => {
-    // 移除原回复
-    currentSession.value.messages.splice(index, 1)
-    
-    // 获取前一条用户消息
-    const userMessage = currentSession.value.messages[index - 1].content
-    
-    // 重新生成
-    simulateAIResponse(userMessage)
-  }
 
-  const rateResponse = (index: number, stars: number) => {
-    currentSession.value.messages[index].rating = stars
-    saveSessions()
-  }
-
-  function handleLogin(username: string) {
-    userStore.login(username)
+  function handleLogin(username: string, userId: number) {
+    userStore.login(username, userId)
     showLoginModal.value = false
   }
 
   function logout() {
     userStore.logout()
     showLoginModal.value = true
+    // 注销时清空本地历史会话缓存和账号信息
+    localStorage.removeItem('designReviewSessions')
+    localStorage.removeItem('designReviewLogin')
   }
 
-  const saveSessions = () => {
-    // 保存到本地存储
-    localStorage.setItem('designReviewSessions', JSON.stringify([
-      ...historySessions.value,
-      {...currentSession.value}
-    ]))
-    
-    // 如果已登录，同步到云端
-    if (userStore.isLoggedIn) {
-      syncToCloud()
-    }
-  }
 
-  const syncToCloud = () => {
-    // 实际应用中应调用API同步数据
-    console.log('同步数据到云端...')
-  }
 
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleDateString('zh-CN', {

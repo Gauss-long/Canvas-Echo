@@ -34,7 +34,7 @@ class Message(Base):
     session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
     content = Column(Text, nullable=False)
     role = Column(String(20), nullable=False)
-    content_type = Column(String(20), default="text")
+    image = Column(Text, nullable=True)  # 保留 image 字段
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("Session", back_populates="messages")

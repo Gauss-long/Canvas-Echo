@@ -56,12 +56,13 @@ const handleLogin = async () => {
     })
     const data = await res.json()
     if (data.success) {
-      emit('login', username.value)
+      emit('login', username.value, data.user_id)
       emit('close')
     } else {
       alert(data.message || '用户名或密码错误')
     }
   } catch (e) {
+    console.error(e)
     alert('登录请求失败，请稍后重试')
   }
 }
