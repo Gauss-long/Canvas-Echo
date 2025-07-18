@@ -36,18 +36,18 @@
           <h3>历史对话</h3>
         </div>
         <ul>
-          <li 
-            v-for="(session, index) in historySessions" 
-            :key="index"
-            @click="loadSession(session.id)"
-            :class="{ active: currentSessionId === session.id }"
-          >
+            <li
+              v-for="session in historySessions"
+              :key="session.id"
+              @click="loadSession(session.id)"
+              :class="{ active: currentSessionId === session.id }"
+            >
             <div class="session-info">
-              {{ session.title || `对话 ${index + 1}` }}
+              {{ session.title }}
               <span class="date">{{ formatDate(session.created_at) }}</span>
             </div>
             <!-- 修改删除按钮文字 -->
-            <button @click.stop="deleteSession(index)" class="delete-btn">删除</button> 
+            <button @click.stop="deleteSession(session.id)" class="delete-btn">删除</button> 
           </li>
         </ul>
       </aside>
@@ -172,7 +172,7 @@
 
   // 聊天会话数据
   const historySessions = ref<Session[]>([])
-  const currentSessionId = ref<number>()
+  const currentSessionId = ref<number>(0)
   const currentSession = ref<Session>({
     id: 0,
     user_id: 0,
@@ -221,7 +221,11 @@
     // 如果已登录，从数据库加载历史对话
     if (userStore.isLoggedIn && userStore.username) {
       await loadHistoryFromDatabase()
-      currentSession.value = historySessions.value[historySessions.value.length - 1]
+      await nextTick()  
+      if (historySessions.value.length) {
+        currentSession.value   = historySessions.value[0]   // 最新一条
+        currentSessionId.value = historySessions.value[0].id
+      }
     }
 
     if (!userStore.isLoggedIn) {
@@ -231,11 +235,12 @@
 
   // 新增：从数据库加载历史对话
   const loadHistoryFromDatabase = async () => {
-    try {
-      const response = await fetch(`/db/history?username=${userStore.username}`)
-      const data = await response.json()
-      if (data.success && data.sessions) {
-        historySessions.value = data.sessions.map((session: any) => ({
+  try {
+    const res  = await fetch(`/db/history?username=${userStore.username}`)
+    const data = await res.json()
+    if (data.success && data.sessions) {
+      historySessions.value = data.sessions
+        .map((session: any): Session => ({
           id: session.id,
           user_id: session.user_id,
           title: session.title,
@@ -249,11 +254,17 @@
             timestamp: new Date(msg.timestamp)
           }))
         }))
-      }
-    } catch (error) {
-      console.error('加载历史对话失败:', error)
+        // 🔽 参数加上类型
+        .sort(
+          (a: Session, b: Session) =>
+            b.created_at.getTime() - a.created_at.getTime()
+        )
     }
+  } catch (err) {
+    console.error('加载历史对话失败:', err)
   }
+}
+
   
   const addMessage = (message: Message) => {
     currentSession.value.messages.push(message)
@@ -270,24 +281,22 @@
 
   const startNewChat = async () => {
     // 保存当前会话
-    if (currentSession.value.messages.length > 0) {
-      historySessions.value.push({...currentSession.value})
-      // 对历史对话按日期降序排序（最近的在前面）
-      historySessions.value.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    if (currentSession.value.messages.length) {
+      historySessions.value = [
+        // 深拷贝，避免后续修改影响历史记录
+        { ...currentSession.value, messages: [...currentSession.value.messages] },
+        // 过滤掉相同 id，防止重复
+          ...historySessions.value.filter(s => s.id !== currentSession.value.id)
+      ]
     }
     
     // 创建新会话
     const newSession = await createSession("新会话");
     if (newSession) {
-      currentSessionId.value = newSession.id;
-      currentSession.value = {
-        id: newSession.id,
-        user_id: newSession.user_id,
-        title: newSession.title,
-        created_at: newSession.created_at,
-        messages: newSession.messages
-      }
-    } else {
+      historySessions.value.unshift(newSession) // 放在列表顶部
+      currentSessionId.value = newSession.id
+      currentSession.value   = newSession
+    }else {
       console.error('创建新会话失败')
     }
     
@@ -297,13 +306,30 @@
     // 添加默认开头消息
     addMessage({
       id: 0,
-      session_id: currentSession.value.id,
+      session_id: currentSessionId.value,
       content: '您好！请问您有什么设计需求?',
-      image: '',
       role: 'assistant',
+      image: '',
       timestamp: new Date()
     })
-    
+    try {
+      const response = await fetch('/db/create_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId.value,
+          content: '您好！请问您有什么设计需求?',
+          role: 'assistant',
+          image: ''
+        })
+      })
+      const data = await response.json()
+      if (!data.success) {
+        console.error('写入数据库失败:', data.message)
+      }
+    } catch (error) {
+      console.error('写入数据库请求失败:', error)
+    }
   }
 
 
@@ -341,53 +367,49 @@
 
   const saveSessions = () => {
     // 保存到本地存储
-    localStorage.setItem('designReviewSessions', JSON.stringify([
-      ...historySessions.value,
-      {...currentSession.value}
-    ]))
+    localStorage.setItem(
+      'designReviewSessions',
+      JSON.stringify(historySessions.value)
+    )
 }
 
 
-  // 删除对话方法
-  const deleteSession = async (index: number) => {
-    // 使用 confirm 方法弹出确认对话框
-    const isConfirmed = confirm('你确定要删除这个对话吗？');
-    if (isConfirmed) {
-      // 1. 先获取要删除的会话信息（在删除前保存）
-      const sessionToDelete = historySessions.value[index];
-      const sessionId = sessionToDelete.id;
-      const isCurrentSession = currentSessionId.value === sessionId;
-      
-      // 2. 先尝试删除数据库中的会话
-      try {
-        const response = await fetch('/db/delete_session', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId })
-        });
-        const data = await response.json();
-        
-        if (!data.success) {
-          console.error('删除会话失败:', data.message);
-          return; // 数据库删除失败，不继续执行
-        }
-        
-        // 3. 数据库删除成功后，再更新前端状态
-        historySessions.value.splice(index, 1);
-        saveSessions();
-        
-        // 4. 如果删除的是当前会话，开始新对话
-        if (isCurrentSession) {
-          startNewChat();
-        }
-        
-      } catch (error) {
-        console.error('删除会话请求失败:', error);
-        // 网络错误时可以选择是否回滚前端状态
-        // 这里选择不回滚，让用户知道删除失败
+const deleteSession = async (sessionId: number) => {
+  if (!confirm('你确定要删除这个对话吗？')) return
+
+  const isCurrent = currentSessionId.value === sessionId
+  try {
+    const res = await fetch('/db/delete_session', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId })
+    })
+    const data = await res.json()
+    if (!data.success) throw new Error(data.message)
+
+    // 删除后再更新历史列表
+    historySessions.value = historySessions.value.filter(s => s.id !== sessionId)
+
+    if (isCurrent) {
+      uploadedImage.value = null
+      currentSessionId.value = 0
+      currentSession.value = {
+        id: 0,
+        user_id: userStore.userId ?? 0,
+        title: '新对话',
+        created_at: new Date(),
+        messages: []
       }
+      await nextTick()
+      await startNewChat()
     }
-  };
+
+    saveSessions()
+  } catch (err) {
+    console.error('删除会话失败:', err)
+  }
+}
+
 
   // 新增：切换侧边栏显示状态的方法
   const toggleSidebar = () => {
@@ -439,8 +461,8 @@
     id: max_id_value + 1,
     session_id: currentSession.value.id,
     content: userInput.value,
-    image: imageUrl || '',
     role: 'user',
+    image: imageUrl || '',
     timestamp: new Date()
   }
   addMessage(userMsg)
@@ -456,8 +478,8 @@
     id: max_id_value + 2,
     session_id: currentSession.value.id,
     content: aiContent,
-    image: '', // 如有AI图片可补充
     role: 'assistant',
+    image: '', // 如有AI图片可补充
     timestamp: new Date()
   }
   addMessage(aiMsg)
@@ -519,23 +541,33 @@
   }
 
 
-  const loadSession = (sessionId: string | number) => {
+  const loadSession = (sessionId: number) => {
     const session = historySessions.value.find(s => s.id === sessionId)
-    if (session) {
-      currentSessionId.value = Number(sessionId)
-      currentSession.value = { ...session }
-    }
-    else{
+    if (!session) {
       console.error('加载会话失败:', sessionId)
+      return
     }
+    currentSessionId.value = sessionId
+    currentSession.value   = { ...session }
   }
+
 
 
   function handleLogin(username: string, userId: number) {
     userStore.login(username, userId)
     showLoginModal.value = false
+    loadHistoryAfterLogin()
+  }
+  const loadHistoryAfterLogin = async () => {
+    await loadHistoryFromDatabase()
+    await nextTick()
+    if (historySessions.value.length) {
+      currentSession.value   = historySessions.value[0]
+      currentSessionId.value = historySessions.value[0].id
+    }
   }
 
+  
   function logout() {
     userStore.logout()
     showLoginModal.value = true

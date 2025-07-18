@@ -78,10 +78,10 @@ def get_user_history(username: str):
 
 
 
-def create_message(session_id: int, content: str, image: str, role: str):
+def create_message(session_id: int, content: str, role: str,image:str):
     db = next(get_db())
     sid = int(session_id)
-    add_message_to_session(db, sid, content,role, str(image))
+    add_message_to_session(db, sid, content,role, image)
 
 def get_max_message_id():
     db = next(get_db())
