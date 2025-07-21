@@ -33,6 +33,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     content: str
+    session_id: int  # 新增字段
 
 class LoginRequest(BaseModel):
     username: str
@@ -81,13 +82,11 @@ async def generate_response(content: str):
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """调用真实大模型的API"""
-    print(f"收到聊天请求：{request.content}")
-    # 构造消息格式
+    print(f"收到聊天请求：{request.content}，session_id={request.session_id}")
     input_messages = [{"role": "user", "content": request.content}]
-    # 调用chat_chain.app的astream方法，流式返回
+    app = chat_chain.get_app_for_session(request.session_id)
     async def stream_llm():
-        async for chunk, meta in chat_chain.app.astream({"messages": input_messages}, config=chat_chain.config, stream_mode="messages"):
-            # chunk是AI回复内容
+        async for chunk, meta in app.astream({"messages": input_messages}, config=chat_chain.config, stream_mode="messages"):
             if hasattr(chunk, 'content'):
                 yield chunk.content
             elif isinstance(chunk, dict) and 'content' in chunk:
@@ -96,7 +95,7 @@ async def chat(request: ChatRequest):
                 yield str(chunk)
     return StreamingResponse(stream_llm(), media_type="text/event-stream")
 
-@app.post("/api/chat_reason")
+@app.post("/api/chat_txt")
 async def chat_reason(request: ChatRequest):
     """推理型聊天API"""
     print(f"收到推理请求：{request.content}")

@@ -518,7 +518,7 @@ const deleteSession = async (sessionId: number) => {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: userMessage })
+        body: JSON.stringify({ content: userMessage, session_id: currentSession.value.id }) // 修复：加上 session_id
       })
       const reader = response.body?.getReader()
       if (reader) {

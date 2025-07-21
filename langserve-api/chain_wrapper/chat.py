@@ -30,8 +30,15 @@ def call_model(state: MessagesState):
 workflow.add_edge(START, "model")
 workflow.add_node("model", call_model)
 
-memory = MemorySaver()
-app = workflow.compile(checkpointer=memory)
+# 新增：全局 memory 字典
+memory_dict = {}
+
+def get_app_for_session(session_id):
+    sid = str(session_id)
+    if sid not in memory_dict:
+        memory_dict[sid] = MemorySaver()
+    memory = memory_dict[sid]
+    return workflow.compile(checkpointer=memory)
 
 config = {
     "configurable":{
