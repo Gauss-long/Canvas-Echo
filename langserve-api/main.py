@@ -182,6 +182,11 @@ def update_session_title_api(request: UpdateSessionTitleRequest):
     db_func.update_session_title(request.session_id, request.title)
     return {"success": True}
 
+@app.get("/db/get_all_versions")
+def get_all_versions_api(session_id: int):
+    versions = db_func.get_all_versions(session_id)
+    return {"success": True, "versions": versions}
+
 @app.get("/")
 async def root():
     """根路径"""

@@ -5,7 +5,7 @@ from .crud import (
     create_user, get_user_by_username, authenticate_user,
     create_user_session, get_user_sessions, delete_user_session,
     add_message_to_session, get_session_messages, get_session_by_id,
-    get_max_message_id_database
+    get_max_message_id_database, download_all_versions
 )   
 from . import schemas, models
 from typing import Optional
@@ -93,3 +93,6 @@ def update_session_title(session_id: int, title: str):
     if session:
         session.title = title
         db.commit()
+def get_all_versions(session_id: int):
+    db = next(get_db())
+    return download_all_versions(db, session_id)

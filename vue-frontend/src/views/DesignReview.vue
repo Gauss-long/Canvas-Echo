@@ -9,7 +9,7 @@
       <div class="button-group">
         <!-- 顶部只保留返回 -->
         <button class="back-btn" @click="goBack">
-          &lt; 返回
+          ‹ 返回
         </button>
       </div>
       <div class="auth-section">
