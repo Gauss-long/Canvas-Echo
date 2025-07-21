@@ -7,6 +7,7 @@ from starlette.responses import StreamingResponse
 import asyncio
 import json
 from chain_wrapper import chat as chat_chain
+from chain_wrapper import title as title_chain
 from fastapi import Depends, HTTPException
 import sys
 import os
@@ -18,8 +19,8 @@ from database import function as db_func  # 新增：引入 function.py
 # 创建FastAPI应用
 app = FastAPI(
     title="Canvas Echo API",
-    version="1.0",
-    description="简化的Canvas Echo API服务器"
+    version="4.5",
+    description="高级的Canvas Echo API服务器"
 )
 
 # 添加CORS中间件
@@ -30,6 +31,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class Input(BaseModel):
+    content: str
 
 class ChatRequest(BaseModel):
     content: str
@@ -59,6 +63,10 @@ class CreateSessionRequest(BaseModel):
     title: str = "新对话"
 class DeleteSessionRequest(BaseModel):
     session_id: int
+
+class UpdateSessionTitleRequest(BaseModel):
+    session_id: int
+    title: str
 
 async def generate_response(content: str):
     """生成模拟的AI回复"""
@@ -103,6 +111,11 @@ async def chat_reason(request: ChatRequest):
         generate_response(f"[推理模式] {request.content}"),
         media_type="text/event-stream"
     )
+@app.post("/api/title")
+async def title(request: Input):
+    """生成标题"""
+    print(f"收到标题请求：{request.content}")
+    return {"success": True, "title": title_chain.get_title(request.content)}
 
 @app.post("/db/login")
 def db_login(request: LoginRequest):
@@ -163,6 +176,11 @@ def create_message_pair_api(req: MessagePairRequest):
 def get_max_message_id_api():
     max_id = db_func.get_max_message_id()
     return {"success": True, "max_id": max_id}
+
+@app.post("/db/update_session_title")
+def update_session_title_api(request: UpdateSessionTitleRequest):
+    db_func.update_session_title(request.session_id, request.title)
+    return {"success": True}
 
 @app.get("/")
 async def root():

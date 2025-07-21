@@ -1,20 +1,23 @@
 <template>
-  <!-- 原模板代码保持不变 -->
+  <!-- 顶层容器 -->
   <div class="design-review-container">
-    <!-- 遮罩层，未登录时显示，禁止主界面交互 -->
+    <!-- 遮罩层（未登录时禁用交互） -->
     <div v-if="showLoginModal" class="modal-mask"></div>
+
     <!-- 顶部导航栏 -->
     <header class="app-header">
-      <!-- 新增一个容器来包裹开启新对话和返回按钮 -->
       <div class="button-group">
-        <button class="new-chat-btn" @click="startNewChat">
-          <span>开启新对话</span>
+        <!-- 顶部只保留返回 -->
+        <button class="back-btn" @click="goBack">
+          &lt; 返回
         </button>
-        <!-- 添加返回按钮 -->
-        <button class="back-btn" @click="goBack">返回</button>
       </div>
       <div class="auth-section">
-        <button v-if="!userStore.isLoggedIn" class="login-btn" @click="showLoginModal = true">
+        <button
+          v-if="!userStore.isLoggedIn"
+          class="login-btn"
+          @click="showLoginModal = true"
+        >
           <span> 登录</span>
         </button>
         <div v-else class="user-info">
@@ -24,121 +27,599 @@
       </div>
     </header>
 
-    <!-- 侧边栏显示切换按钮 -->
-    <button class="toggle-sidebar-btn" @click="toggleSidebar">
-      <span>{{ isSidebarOpen ? '<' : '>' }}</span>
-    </button>
+    <!-- ============ 主体区域：左侧按钮列 + 旧 main-content ============ -->
+    <div class="content-wrapper">
+      <!-- 左侧细长按钮面板：永远显示 -->
+      <aside class="toggle-column">
+        <button class="toggle-sidebar-btn" @click="toggleSidebar">
+          <!-- isSidebarOpen 为真 ⇒ 显示左箭头 ‹；否则显示右箭头 › -->
+          <span>{{ isSidebarOpen ? '‹' : '›' }}</span>
+        </button>
+      </aside>
 
-    <div class="main-content">
-      <!-- 侧边栏 - 历史对话 -->
-      <aside class="history-sidebar" :style="{ display: isSidebarOpen ? 'block' : 'none' }">
-        <div class="sidebar-header">
-          <h3>历史对话</h3>
-        </div>
-        <ul>
+      <!-- 原 main-content（包含历史侧栏 / 聊天 / 展示区） -->
+      <div class="main-content">
+        <!-- 历史对话侧边栏 -->
+        <aside
+          class="history-sidebar"
+          :style="{ display: isSidebarOpen ? 'block' : 'none' }"
+        >
+          <div class="sidebar-header">
+            <h3>历史对话</h3>
+            
+          </div>
+          <button class="new-chat-sidebar-btn" @click="startNewChat">
+            ＋ 新对话
+          </button>
+
+          <ul>
             <li
               v-for="session in historySessions"
               :key="session.id"
               @click="loadSession(session.id)"
               :class="{ active: currentSessionId === session.id }"
             >
-            <div class="session-info">
-              {{ session.title }}
-              <span class="date">{{ formatDate(session.created_at) }}</span>
-            </div>
-            <!-- 修改删除按钮文字 -->
-            <button @click.stop="deleteSession(session.id)" class="delete-btn">删除</button> 
-          </li>
-        </ul>
-      </aside>
+              <div class="session-info">
+                {{ session.title }}
+                <span class="date">{{ formatDate(session.created_at) }}</span>
+              </div>
+              <button
+                @click.stop="deleteSession(session.id)"
+                class="delete-btn"
+              >
+                删除
+              </button>
+            </li>
+          </ul>
+          
+        </aside>
 
-      <!-- 主对话区域 -->
-      <div class="chat-container">
-        <div class="messages" ref="messagesContainer">
-          <div 
-            v-for="(msg, index) in currentSession.messages" 
-            :key="index" 
-            class="message"
-            :class="msg.role"
-          >
-            <div class="avatar">
-              {{ msg.role === 'user' ? '👤' : '🤖' }}
-            </div>
-            
-            <div class="content">
-              <div v-if="msg.role === 'user' && msg.image">
-                <img :src="msg.image" alt="上传的设计稿" class="design-image">
-              </div>
-              <div v-html="msg.content"></div>
-              
-              <!-- 模型回复操作区 -->
-              <!-- 删除 assistant 消息下的重新生成按钮 -->
-              <!--
-              <div v-if="msg.role === 'assistant'" class="message-actions">
-                <button @click="regenerateResponse(index)" class="action-btn">
-                  🔄 重新生成
-                </button>
-                <div class="rating">
-                  <span 
-                    v-for="star in 5" 
-                    :key="star" 
-                    @click="rateResponse(index, star)"
-                    :class="{ active: (msg.rating||0 )>= star }"
-                  >
-                    ⭐
-                  </span>
+        <!-- 主聊天区域 -->
+        <div class="chat-container">
+          <div class="messages" ref="messagesContainer">
+            <div
+              v-for="(msg, index) in currentSession.messages"
+              :key="index"
+              class="message"
+              :class="msg.role"
+            >
+              <div class="avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
+
+              <div class="content">
+                <div v-if="msg.role === 'user' && msg.image">
+                  <img :src="msg.image" alt="上传的设计稿" class="design-image" />
                 </div>
+                <div v-html="msg.content"></div>
               </div>
-              -->
             </div>
+          </div>
+
+          <!-- 输入区 -->
+          <div class="input-area">
+            <div class="image-upload">
+              <input
+                type="file"
+                accept="image/*"
+                ref="fileInput"
+                @change="handleImageUpload"
+                style="display: none"
+              />
+              <button @click="triggerFileInput" class="upload-btn">
+                上传图片
+              </button>
+              <span v-if="uploadedImage" class="file-name">{{
+                uploadedImage.name
+              }}</span>
+            </div>
+
+            <textarea
+              v-model="userInput"
+              placeholder="输入您的设计问题或上传设计稿..."
+              @keyup.enter="sendMessage"
+            ></textarea>
+
+            <button @click="sendMessage" class="send-btn">发送</button>
           </div>
         </div>
 
-        <!-- 输入区域 -->
-        <div class="input-area">
-          <div class="image-upload">
-            <input 
-              type="file" 
-              accept="image/*" 
-              ref="fileInput"
-              @change="handleImageUpload"
-              style="display: none"
-            >
-            <button @click="triggerFileInput" class="upload-btn">
-               上传图片
-            </button>
-            <span v-if="uploadedImage" class="file-name">
-              {{ uploadedImage.name }}
-            </span>
+        <!-- 展示区 -->
+        <aside class="display-panel" v-show="isShowPanel">
+          <!-- 展示区顶部按钮区 -->
+          <div class="display-panel-header">
+            <div class="tab-group">
+              <button :class="{ active: displayMode === 'render' }" @click="displayMode = 'render'">
+                <i class="fa-regular fa-circle-play"></i> 预览
+              </button>
+              <button :class="{ active: displayMode === 'code' }" @click="displayMode = 'code'">
+                <strong style="font-weight: 700;">&lt;/&gt;</strong> 代码
+              </button>
+            </div>
+
+            <div class="action-group">
+              <button>
+                <i class="fa-regular fa-paste"></i> 复制
+              </button>
+              <button>
+                <i class="fa-solid fa-floppy-disk"></i> 下载
+              </button>
+            </div>
           </div>
-          
-          <textarea 
-            v-model="userInput" 
-            placeholder="输入您的设计问题或上传设计稿..."
-            @keyup.enter="sendMessage"
-          ></textarea>
-          
-          <button @click="sendMessage" class="send-btn">
-            发送
-          </button>
+          <!-- 展示区内容区 -->
+          <div class="display-panel-content">
+            <div v-if="displayMode === 'render'" class="render-box">
+              <div v-html="htmlContent"></div>
+            </div>
+            <div v-else class="code-box">
+              <pre><code ref="codeBoxRef" class="html">{{ htmlContent }}</code></pre>
+            </div>
+          </div>
+          <!-- 展示区底部版本管理区 -->
+          <div class="display-panel-version">
+            <div class="version-list">
+              <button
+                v-for="ver in versions"
+                :key="ver"
+                :class="{ active: ver === currentVersion }"
+                @click="selectVersion(ver)"
+              >{{ ver }}</button>
+            </div>
+          </div>
+          <button class="toggle-panel-btn-inside" @click="togglePanel">×</button>
+        </aside>
+
+        <!-- 展示区收起后的小按钮 -->
+        <div class="display-panel-placeholder" v-show="!isShowPanel">
+          <button class="toggle-panel-btn-inside" @click="togglePanel">‹</button>
         </div>
       </div>
     </div>
 
     <!-- 登录模态框 -->
-    <LoginModal 
-      v-if="showLoginModal" 
-      @login="handleLogin"
-    />
+    <LoginModal v-if="showLoginModal" @login="handleLogin" />
   </div>
 </template>
 
+
+<style scoped>
+/* ======= 布局整体 ======= */
+.design-review-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #f5f7fa;
+}
+
+/* ===== 顶部导航 ===== */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 10px;
+  background-color: white;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+}
+
+.button-group {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.back-btn,
+.login-btn {
+  background: #1f2023;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.user-info button {
+  background: #1f2023;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.user-info span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: #1976d2;
+  color: #fff;
+  border-radius: 50%;
+  font-weight: bold;
+  font-size: 1.1em;
+  margin-right: 8px;
+}
+
+/* ===== 主体：左侧按钮列 + main-content ===== */
+.content-wrapper {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* 左侧细长列 */
+.toggle-column {
+  width: 30px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+/* 左侧列按钮 */
+.toggle-sidebar-btn {
+  background: transparent;
+  border: none;
+  color: #000;
+  cursor: pointer;
+  font-size: 2rem;
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== 原 main-content ===== */
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* 历史对话侧边栏 */
+.history-sidebar {
+  width: 200px;
+  background: white;
+  border-right: 1px solid #eaeaea;
+  padding: 7px;
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #333;
+}
+
+/* 对话列表项 */
+.history-sidebar ul {
+  list-style: none;
+  padding: 0;
+}
+
+.history-sidebar li,
+.new-chat-sidebar-btn {
+  width: 100%;
+  padding: 10px 15px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+  border: none;
+  font: inherit;
+  text-align: left;
+}
+
+.history-sidebar li:hover,
+.new-chat-sidebar-btn:hover {
+  background: #f0f4ff;
+}
+
+.history-sidebar li.active {
+  background: #e0e8ff;
+  font-weight: 500;
+}
+
+.new-chat-sidebar-btn {
+  border: 1px dashed #bbb;
+  color: #1f2023;
+  gap: 6px;
+  justify-content: center;
+}
+
+/* 日期 */
+.date {
+  display: block;
+  font-size: 0.8em;
+  color: #888;
+}
+
+/* 聊天主区域 */
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.messages {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.message {
+  display: flex;
+  gap: 15px;
+  max-width: 90%;
+}
+
+.message.user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e0e8ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.message.user .avatar {
+  background: #d1e7ff;
+}
+
+.content {
+  background: #fff;
+  padding: 15px;
+  border-radius: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  max-width: 80%;
+}
+
+.message.user .content {
+  background: #e0e8ff;
+}
+
+.design-image {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 10px;
+  margin: 10px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* 输入区 */
+.input-area {
+  padding: 15px;
+  background: #fff;
+  border-top: 1px solid #eaeaea;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.image-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.upload-btn {
+  background: #0f0404;
+  border: none;
+  border-radius: 18px;
+  padding: 8px 15px;
+  cursor: pointer;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.file-name {
+  font-size: 0.8em;
+  color: #666;
+  margin-top: 5px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+textarea {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 18px;
+  padding: 12px 15px;
+  resize: none;
+  height: 50px;
+  font-family: inherit;
+}
+
+.send-btn {
+  background: #1f2023;
+  color: #fff;
+  border: none;
+  border-radius: 18px;
+  padding: 0 20px;
+  cursor: pointer;
+  font-weight: 500;
+  align-self: flex-end;
+}
+
+.delete-btn {
+  background: none;
+  border: none;
+  color: #0f0404;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+/* 展示区 */
+.display-panel {
+  position: relative;
+  width: 700px;
+  background: #fff;
+  border-left: 1px solid #eaeaea;
+  padding: 20px;
+  box-sizing: border-box;
+  transition: width 0.2s;
+  overflow-y: auto;
+}
+
+.display-panel[style*='display: none'] {
+  width: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.toggle-panel-btn-inside {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  width: 36px;
+  height: 36px;
+  font-size: 2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.display-panel-placeholder {
+  position: relative;
+  width: 0;
+  background: transparent;
+  border-left: 1px solid transparent;
+}
+
+.display-panel-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.tab-group, .action-group {
+  display: flex;
+  align-items: center;
+}
+.tab-group button, .action-group button {
+  margin-right: 8px;
+  padding: 6px 16px;
+  border: none;
+  background: #eee;
+  border-radius: 6px 6px 0 0;
+  font-weight: 500;
+  font-size: 1em;
+  display: flex;
+  align-items: center;
+}
+.tab-group button.active {
+  background: #1f2023;
+  color: #fff;
+}
+.action-group {
+  margin-left: 0;
+}
+.display-panel-content {
+  width: 100%;
+  min-height: 400px;
+  background: #fafbfc;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.render-box {
+  min-height: 180px;
+}
+.code-box pre {
+  background:transparent;
+  border-radius: 8px;
+  font-family: Consolas, 'Fira Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 0.8em;
+  overflow-x: auto;
+}
+.display-panel-version {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+.version-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+.version-list button {
+  padding: 4px 16px;
+  border: none;
+  background: #eee;
+  border-radius: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.version-list button.active {
+  background: #1f2023;
+  color: #fff;
+}
+
+/* 遮罩 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+}
+
+</style>
+
+
 <script setup lang="ts">
   // 原有的script部分代码保持不变
-  import { ref, computed, onMounted, nextTick } from 'vue'
+  import { ref, computed, onMounted, nextTick, watch } from 'vue'
   import LoginModal from '@/components/LoginModal.vue'
   import { useRouter } from 'vue-router' // 引入路由实例
   import { useUserStore } from '@/stores/user'
+  // @ts-ignore
+  import hljs from 'highlight.js'
+  import 'highlight.js/styles/atom-one-light.css' // 更花哨的高亮主题
+
+
 
   const router = useRouter() // 获取路由实例
   const userStore = useUserStore()
@@ -183,6 +664,10 @@
 
   // 新增：侧边栏显示状态
   const isSidebarOpen = ref(true)
+  const isShowPanel = ref(false) // 控制展示区显示/隐藏
+  const togglePanel = () => {
+    isShowPanel.value = !isShowPanel.value
+  }
 
   const userAbbr = computed(() => {
     if (!userStore.username) return ''
@@ -290,8 +775,8 @@
       ]
     }
     
-    // 创建新会话
-    const newSession = await createSession("新会话");
+    // 创建新对话
+    const newSession = await createSession("新对话");
     if (newSession) {
       historySessions.value.unshift(newSession) // 放在列表顶部
       currentSessionId.value = newSession.id
@@ -455,7 +940,28 @@ const deleteSession = async (sessionId: number) => {
   const max_id = await fetch('/db/get_max_message_id')
   const data = await max_id.json()
   const max_id_value = data.max_id
-
+  //1.5 生成标题
+  if(currentSession.value.title === '新对话'){
+    const title = await fetch('/api/title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: userInput.value })
+    })
+    const titleData = await title.json()
+    currentSession.value.title = titleData.title
+    // 同步到历史会话
+    const idx = historySessions.value.findIndex(s => s.id === currentSession.value.id)
+    if (idx !== -1) {
+      historySessions.value[idx].title = titleData.title
+    }
+    await fetch('/db/update_session_title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: currentSession.value.id, title: titleData.title })
+    })
+    saveSessions()
+    await nextTick()
+  }
   // 2. 本地插入用户消息
   const userMsg = {
     id: max_id_value + 1,
@@ -591,317 +1097,30 @@ const deleteSession = async (sessionId: number) => {
   const goBack = () => {
     router.push({ name: 'home' })
   }
+
+  const displayMode = ref<'render' | 'code'>('render')
+  const htmlContent = ref('<h1>Hello World</h1>\n<p>This is a paragraph.</p>')
+  const versions = ref(['v1', 'v2', 'v3', 'v4', 'v5', 'v6'])
+  const currentVersion = ref('v1')
+  function selectVersion(ver: string) {
+    currentVersion.value = ver
+  }
+
+  const codeBoxRef = ref<HTMLElement | null>(null)
+
+  function highlightCode() {
+    if (displayMode.value === 'code' && codeBoxRef.value) {
+      hljs.highlightElement(codeBoxRef.value)
+    }
+  }
+
+  onMounted(() => {
+    highlightCode()
+  })
+
+  watch([htmlContent, displayMode], () => {
+    nextTick(() => {
+      highlightCode()
+    })
+  })
 </script>
-
-<style scoped>
-  /* 原有的样式部分代码保持不变 */
-  .design-review-container {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background-color: #f5f7fa;
-  }
-
-  .app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 15px 20px;
-    background-color: white;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-    z-index: 10;
-  }
-
-  .button-group {
-    display: flex;
-    align-items: center;
-    gap: 15px; /* 设置按钮之间的间隔 */
-  }
-
-  .new-chat-btn, .login-btn ,.back-btn{
-    background: #1f2023;
-    color: white;
-    border: none;
-    border-radius: 20px;
-    padding: 10px 16px;
-    cursor: pointer;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .user-info {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-  }
-
-  .main-content {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  .history-sidebar {
-    width: 250px;
-    background-color: white;
-    border-right: 1px solid #eaeaea;
-    padding: 20px;
-    overflow-y: auto;
-  }
-
-  .sidebar-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 15px;
-  }
-
-  .sidebar-header h3 {
-    margin: 0;
-    color: #333;
-    font-size: 18px; 
-    letter-spacing: 1px; 
-    padding-left: 40px; 
-    font-weight: 700; 
-
-  }
-
-  .toggle-sidebar-btn {
-    background: #1f2023;
-    color: white;
-    border: none;
-    border-radius: 20px;
-    padding: 8px 16px;
-    cursor: pointer;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    position: absolute;
-    left: 10px;
-    top: 80px;
-    z-index: 11;
-  }
-
-  .history-sidebar ul {
-    list-style: none;
-    padding: 0;
-  }
-
-
-  .history-sidebar li {
-    padding: 10px 15px; 
-    margin-bottom: 8px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background 0.2s;
-    display: flex; /* 使用弹性布局 */
-    justify-content: space-between; /* 将子元素分散对齐 */
-    align-items: center; /* 垂直居中对齐 */
-  }
-
-  .history-sidebar li:hover {
-    background-color: #f0f4ff;
-  }
-
-  .history-sidebar li.active {
-    background-color: #e0e8ff;
-    font-weight: 500;
-  }
-
-  .date {
-    display: block;
-    font-size: 0.8em;
-    color: #888;
-    margin-top: 4px;
-  }
-
-  .chat-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .messages {
-    flex: 1;
-    padding: 20px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 25px;
-  }
-
-  .message {
-    display: flex;
-    gap: 15px;
-    max-width: 90%;
-  }
-
-  .message.user {
-    align-self: flex-end;
-    flex-direction: row-reverse;
-  }
-
-  .avatar {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background-color: #e0e8ff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    flex-shrink: 0;
-  }
-
-  .message.user .avatar {
-    background-color: #d1e7ff;
-  }
-
-  .content {
-    background: white;
-    padding: 15px;
-    border-radius: 18px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-    max-width: 80%;
-  }
-
-  .message.user .content {
-    background: #e0e8ff;
-    border-bottom-right-radius: 5px;
-  }
-
-  .message.assistant .content {
-    border-bottom-left-radius: 5px;
-  }
-
-  .design-image {
-    max-width: 100%;
-    max-height: 300px;
-    border-radius: 10px;
-    margin: 10px 0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-
-  .message-actions {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #eee;
-  }
-
-  .action-btn {
-    background: none;
-    border: none;
-    color: #1f2023;
-    cursor: pointer;
-    font-size: 0.9em;
-    padding: 5px;
-  }
-
-  .rating {
-    display: flex;
-    gap: 3px;
-  }
-
-  .rating span {
-    cursor: pointer;
-    color: #ddd;
-    font-size: 1.1em;
-  }
-
-  .rating span.active {
-    color: #ffc107;
-  }
-
-  .input-area {
-    padding: 15px;
-    background: white;
-    border-top: 1px solid #eaeaea;
-    display: flex;
-    gap: 10px;
-  }
-
-  .image-upload {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .upload-btn {
-    background: #0f0404;
-    border: none;
-    border-radius: 18px;
-    padding: 8px 15px;
-    cursor: pointer;
-    color: white; 
-    white-space: nowrap;
-  }
-
-  .file-name {
-    font-size: 0.8em;
-    color: #666;
-    margin-top: 5px;
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  textarea {
-    flex: 1;
-    border: 1px solid #ddd;
-    border-radius: 18px;
-    padding: 12px 15px;
-    resize: none;
-    height: 50px;
-    font-family: inherit;
-  }
-
-  .send-btn {
-    background: #1f2023;
-    color: white;
-    border: none;
-    border-radius: 18px;
-    padding: 0 20px;
-    cursor: pointer;
-    font-weight: 500;
-    align-self: flex-end;
-  }
-
-  .delete-btn {
-    background: none;
-    border: none;
-    color: #0f0404;
-    cursor: pointer;
-    font-size: 0.9em;
-    padding: 5px;
-    margin-left: 10px;
-  }
-
-  .design-feedback, .design-analysis {
-    line-height: 1.6;
-  }
-
-  .feedback-section, .analysis-section {
-    margin: 15px 0;
-    padding-bottom: 15px;
-    border-bottom: 1px solid #f0f0f0;
-  }
-
-  .feedback-section:last-child, .analysis-section:last-child {
-    border-bottom: none;
-  }
-
-  .modal-mask {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 999;
-  }
-</style>

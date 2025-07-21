@@ -86,3 +86,10 @@ def create_message(session_id: int, content: str, role: str,image:str):
 def get_max_message_id():
     db = next(get_db())
     return get_max_message_id_database(db)
+
+def update_session_title(session_id: int, title: str):
+    db = next(get_db())
+    session = get_session_by_id(db, session_id)
+    if session:
+        session.title = title
+        db.commit()
