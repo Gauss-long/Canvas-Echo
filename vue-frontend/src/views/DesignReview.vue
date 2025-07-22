@@ -31,93 +31,93 @@
     <div class="content-wrapper">
       <!-- 左侧细长按钮面板：永远显示 -->
       <aside class="toggle-column">
-        <button class="toggle-sidebar-btn" @click="toggleSidebar">
+    <button class="toggle-sidebar-btn" @click="toggleSidebar">
           <!-- isSidebarOpen 为真 ⇒ 显示左箭头 ‹；否则显示右箭头 › -->
           <span>{{ isSidebarOpen ? '‹' : '›' }}</span>
-        </button>
+    </button>
       </aside>
 
       <!-- 原 main-content（包含历史侧栏 / 聊天 / 展示区） -->
-      <div class="main-content">
+    <div class="main-content">
         <!-- 历史对话侧边栏 -->
         <aside
           class="history-sidebar"
           :style="{ display: isSidebarOpen ? 'block' : 'none' }"
         >
-          <div class="sidebar-header">
-            <h3>历史对话</h3>
+        <div class="sidebar-header">
+          <h3>历史对话</h3>
             
-          </div>
+        </div>
           <button class="new-chat-sidebar-btn" @click="startNewChat">
             ＋ 新对话
           </button>
 
-          <ul>
+        <ul>
             <li
               v-for="session in historySessions"
               :key="session.id"
               @click="loadSession(session.id)"
               :class="{ active: currentSessionId === session.id }"
             >
-              <div class="session-info">
-                {{ session.title }}
-                <span class="date">{{ formatDate(session.created_at) }}</span>
-              </div>
+            <div class="session-info">
+              {{ session.title }}
+              <span class="date">{{ formatDate(session.created_at) }}</span>
+            </div>
               <button
                 @click.stop="deleteSession(session.id)"
                 class="delete-btn"
               >
                 删除
               </button>
-            </li>
-          </ul>
+          </li>
+        </ul>
           
-        </aside>
+      </aside>
 
         <!-- 主聊天区域 -->
-        <div class="chat-container">
-          <div class="messages" ref="messagesContainer">
-            <div
-              v-for="(msg, index) in currentSession.messages"
-              :key="index"
-              class="message"
-              :class="msg.role"
-            >
+      <div class="chat-container">
+        <div class="messages" ref="messagesContainer">
+          <div 
+            v-for="(msg, index) in currentSession.messages" 
+            :key="index" 
+            class="message"
+            :class="msg.role"
+          >
               <div class="avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
-
-              <div class="content">
-                <div v-if="msg.role === 'user' && msg.image">
+            
+            <div class="content">
+              <div v-if="msg.role === 'user' && msg.image">
                   <img :src="msg.image" alt="上传的设计稿" class="design-image" />
-                </div>
-                <div v-html="msg.content"></div>
               </div>
+              <div v-html="msg.content"></div>
             </div>
           </div>
+        </div>
 
           <!-- 输入区 -->
-          <div class="input-area">
-            <div class="image-upload">
-              <input
-                type="file"
-                accept="image/*"
-                ref="fileInput"
-                @change="handleImageUpload"
-                style="display: none"
+        <div class="input-area">
+          <div class="image-upload">
+            <input 
+              type="file" 
+              accept="image/*" 
+              ref="fileInput"
+              @change="handleImageUpload"
+              style="display: none"
               />
-              <button @click="triggerFileInput" class="upload-btn">
-                上传图片
-              </button>
+            <button @click="triggerFileInput" class="upload-btn">
+               上传图片
+            </button>
               <span v-if="uploadedImage" class="file-name">{{
                 uploadedImage.name
               }}</span>
-            </div>
-
-            <textarea
-              v-model="userInput"
-              placeholder="输入您的设计问题或上传设计稿..."
-              @keyup.enter="sendMessage"
-            ></textarea>
-
+          </div>
+          
+          <textarea 
+            v-model="userInput" 
+            placeholder="输入您的设计问题或上传设计稿..."
+            @keyup.enter="sendMessage"
+          ></textarea>
+          
             <button @click="sendMessage" class="send-btn">发送</button>
           </div>
         </div>
@@ -132,22 +132,27 @@
               </button>
               <button :class="{ active: displayMode === 'code' }" @click="displayMode = 'code'">
                 <strong style="font-weight: 700;">&lt;/&gt;</strong> 代码
-              </button>
-            </div>
+          </button>
+        </div>
 
             <div class="action-group">
-              <button>
+              <button @click="copyCode">
                 <i class="fa-regular fa-paste"></i> 复制
               </button>
-              <button>
+              <button @click="downloadHtml">
                 <i class="fa-solid fa-floppy-disk"></i> 下载
               </button>
             </div>
           </div>
           <!-- 展示区内容区 -->
           <div class="display-panel-content">
+            <div v-if="copyTip" class="copy-toast-center">已复制到剪贴板</div>
             <div v-if="displayMode === 'render'" class="render-box">
-              <div v-html="htmlContent"></div>
+              <iframe
+                :srcdoc="htmlContent"
+                sandbox="allow-scripts allow-same-origin"
+                style="width:100%;height:400px;border:none;border-radius:8px;overflow:auto;background:#fafbfc;"
+              ></iframe>
             </div>
             <div v-else class="code-box">
               <pre><code ref="codeBoxRef" class="html">{{ htmlContent }}</code></pre>
@@ -157,11 +162,11 @@
           <div class="display-panel-version">
             <div class="version-list">
               <button
-                v-for="ver in versions"
-                :key="ver"
-                :class="{ active: ver === currentVersion }"
-                @click="selectVersion(ver)"
-              >{{ ver }}</button>
+                v-for="(ver, idx) in versionHtmlList"
+                :key="ver.id"
+                :class="{ active: idx === currentVersionIndex }"
+                @click="selectVersion(idx)"
+              >{{ 'v' + (idx + 1) }}</button>
             </div>
           </div>
           <button class="toggle-panel-btn-inside" @click="togglePanel">×</button>
@@ -176,6 +181,9 @@
 
     <!-- 登录模态框 -->
     <LoginModal v-if="showLoginModal" @login="handleLogin" />
+  </div>
+  <div style="position:fixed;left:-9999px;top:-9999px;z-index:-1;width:400px;pointer-events:none;" ref="hiddenRenderRef">
+    <div v-html="htmlContent"></div>
   </div>
 </template>
 
@@ -564,6 +572,7 @@ textarea {
   margin-bottom: 12px;
   padding: 12px;
   overflow: auto;
+  position: relative; /* Added for positioning toast */
 }
 
 .render-box {
@@ -606,6 +615,34 @@ textarea {
   z-index: 999;
 }
 
+.copy-tip {
+  color: #d3e8fe;
+  margin-left: 8px;
+  font-size: 0.95em;
+}
+
+.copy-toast-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  background: #c0dbf6;
+  color: #ffffff;
+  padding: 14px 32px;
+  border-radius: 24px;
+  box-shadow: 0 4px 16px rgba(25, 118, 210, 0.15);
+  font-size: 1.08em;
+  opacity: 0.95;
+  animation: fadeInOut 1.5s;
+  pointer-events: none;
+}
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translate(-50%, -60%);}
+  10% { opacity: 0.95; transform: translate(-50%, -50%);}
+  90% { opacity: 0.95; transform: translate(-50%, -50%);}
+  100% { opacity: 0; transform: translate(-50%, -60%);}
+}
 </style>
 
 
@@ -618,7 +655,8 @@ textarea {
   // @ts-ignore
   import hljs from 'highlight.js'
   import 'highlight.js/styles/atom-one-light.css' // 更花哨的高亮主题
-
+  // @ts-ignore
+  import { toPng } from 'html-to-image'
 
 
   const router = useRouter() // 获取路由实例
@@ -650,6 +688,8 @@ textarea {
   const showLoginModal = ref(false)
   const isLoggedIn = ref(false)
   const phoneNumber = ref('')
+  const isDownloading = ref(false)   // 防止并发点击
+
 
   // 聊天会话数据
   const historySessions = ref<Session[]>([])
@@ -815,6 +855,7 @@ textarea {
     } catch (error) {
       console.error('写入数据库请求失败:', error)
     }
+    updateDisplayPanelVersions(currentSessionId.value)
   }
 
 
@@ -859,21 +900,21 @@ textarea {
 }
 
 
-const deleteSession = async (sessionId: number) => {
-  if (!confirm('你确定要删除这个对话吗？')) return
+ const deleteSession = async (sessionId: number) => {
+   if (!confirm('你确定要删除这个对话吗？')) return
 
-  const isCurrent = currentSessionId.value === sessionId
-  try {
-    const res = await fetch('/db/delete_session', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId })
-    })
+   const isCurrent = currentSessionId.value === sessionId
+   try {
+     const res = await fetch('/db/delete_session', {
+       method: 'DELETE',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ session_id: sessionId })
+     })
     const data = await res.json()
-    if (!data.success) throw new Error(data.message)
+     if (!data.success) throw new Error(data.message)
 
     // 删除后再更新历史列表
-    historySessions.value = historySessions.value.filter(s => s.id !== sessionId)
+     historySessions.value = historySessions.value.filter(s => s.id !== sessionId)
 
     if (isCurrent) {
       uploadedImage.value = null
@@ -890,10 +931,10 @@ const deleteSession = async (sessionId: number) => {
     }
 
     saveSessions()
-  } catch (err) {
-    console.error('删除会话失败:', err)
-  }
-}
+   } catch (err) {
+     console.error('删除会话失败:', err)
+   }
+ }
 
 
   // 新增：切换侧边栏显示状态的方法
@@ -1055,6 +1096,11 @@ const deleteSession = async (sessionId: number) => {
     }
     currentSessionId.value = sessionId
     currentSession.value   = { ...session }
+    updateDisplayPanelVersions(sessionId)
+
+    nextTick(() => {
+      highlightCode()
+    })
   }
 
 
@@ -1099,28 +1145,85 @@ const deleteSession = async (sessionId: number) => {
   }
 
   const displayMode = ref<'render' | 'code'>('render')
-  const htmlContent = ref('<h1>Hello World</h1>\n<p>This is a paragraph.</p>')
-  const versions = ref(['v1', 'v2', 'v3', 'v4', 'v5', 'v6'])
-  const currentVersion = ref('v1')
-  function selectVersion(ver: string) {
-    currentVersion.value = ver
+  const versionHtmlList = ref<{id: number, image: string}[]>([])
+  const currentVersionIndex = ref(0)
+
+  async function updateDisplayPanelVersions(sessionId: number) {
+    const res = await fetch(`/db/get_all_versions?session_id=${sessionId}`)
+    const data = await res.json()
+    if (data.success && Array.isArray(data.versions)) {
+      versionHtmlList.value = data.versions
+      currentVersionIndex.value = 0
+    } else {
+      versionHtmlList.value = []
+      currentVersionIndex.value = 0
+    }
+    //展示区切换成预览模式
+    displayMode.value = 'render'
+    await nextTick()
   }
+
+  function selectVersion(idx: number) {
+    currentVersionIndex.value = idx
+  }
+
+  const htmlContent = computed(() => {
+    return versionHtmlList.value[currentVersionIndex.value]?.image || ''
+  })
 
   const codeBoxRef = ref<HTMLElement | null>(null)
 
   function highlightCode() {
-    if (displayMode.value === 'code' && codeBoxRef.value) {
-      hljs.highlightElement(codeBoxRef.value)
-    }
+  if (displayMode.value === 'code' && codeBoxRef.value) {
+        hljs.highlightElement(codeBoxRef.value)
+      }
   }
+
+  const hiddenRenderRef = ref<HTMLElement | null>(null)
+
+  const copyTip = ref(false)
+  function copyCode() {
+    navigator.clipboard.writeText(htmlContent.value).then(() => {
+      copyTip.value = true
+      setTimeout(() => { copyTip.value = false }, 1500)
+    })
+  }
+
+  async function downloadHtml() {
+  if (isDownloading.value) return
+  isDownloading.value = true
+  try {
+    const html = htmlContent.value
+    // 获取 session_title
+    let title = currentSession.value.title || 'session'
+    // 去除非法文件名字符，空格转下划线
+    title = title.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_')
+    // 版本号
+    const version = `v${currentVersionIndex.value + 1}`
+    const filename = `${title}_${version}.html`
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error(err)
+    alert('生成 HTML 文件失败，请稍后重试')
+  } finally {
+    isDownloading.value = false
+  }
+}
 
   onMounted(() => {
     highlightCode()
   })
 
-  watch([htmlContent, displayMode], () => {
-    nextTick(() => {
+  watch([htmlContent, displayMode, currentSessionId, currentVersionIndex], () => {
+    setTimeout(() => {
       highlightCode()
     })
   })
+
 </script>

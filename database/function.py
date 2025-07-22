@@ -70,7 +70,7 @@ def get_user_history(username: str):
                     "content": m.content,
                     "image": m.image if m.image else "",
                     "role": m.role,
-                    "timestamp": m.timestamp
+                    "timestamp": m.timestamp.isoformat() if hasattr(m.timestamp, 'isoformat') else str(m.timestamp)
                 } for m in messages
             ]
         })

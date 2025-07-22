@@ -1,16 +1,16 @@
 #!/usr/bin/env python
-from fastapi import FastAPI
+from fastapi import FastAPI,Response
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
-import asyncio
 import json
-from chain_wrapper import chat as chat_chain
+from  chain_wrapper import chat as chat_chain
 from chain_wrapper import title as title_chain
 from fastapi import Depends, HTTPException
-import sys
 import os
+import sys
+import asyncio
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import crud, db as db_module
 from sqlalchemy.orm import Session
@@ -32,12 +32,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ------------------ HTML→PNG 路由 --------------------------
+class Html2PngReq(BaseModel):
+    html: str
+    width: int = 1280
+    height: int = 720
+    scale: float = 1.0
+    full_page: bool = True
+
 class Input(BaseModel):
     content: str
 
 class ChatRequest(BaseModel):
-    content: str
     session_id: int  # 新增字段
+    flag: int
+    user_message: str
+    img_path: str
+    
+    
 
 class LoginRequest(BaseModel):
     username: str
@@ -91,26 +103,8 @@ async def generate_response(content: str):
 async def chat(request: ChatRequest):
     """调用真实大模型的API"""
     print(f"收到聊天请求：{request.content}，session_id={request.session_id}")
-    input_messages = [{"role": "user", "content": request.content}]
-    app = chat_chain.get_app_for_session(request.session_id)
-    async def stream_llm():
-        async for chunk, meta in app.astream({"messages": input_messages}, config=chat_chain.config, stream_mode="messages"):
-            if hasattr(chunk, 'content'):
-                yield chunk.content
-            elif isinstance(chunk, dict) and 'content' in chunk:
-                yield chunk['content']
-            else:
-                yield str(chunk)
-    return StreamingResponse(stream_llm(), media_type="text/event-stream")
+    return {"success": True, "message": chat_chain.get_AI_response(request.session_id, request.flag, request.user_message, request.img_path)}
 
-@app.post("/api/chat_txt")
-async def chat_reason(request: ChatRequest):
-    """推理型聊天API"""
-    print(f"收到推理请求：{request.content}")
-    return StreamingResponse(
-        generate_response(f"[推理模式] {request.content}"),
-        media_type="text/event-stream"
-    )
 @app.post("/api/title")
 async def title(request: Input):
     """生成标题"""
@@ -186,6 +180,7 @@ def update_session_title_api(request: UpdateSessionTitleRequest):
 def get_all_versions_api(session_id: int):
     versions = db_func.get_all_versions(session_id)
     return {"success": True, "versions": versions}
+
 
 @app.get("/")
 async def root():

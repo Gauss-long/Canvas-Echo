@@ -1,15 +1,21 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) )
 from dotenv import load_dotenv,find_dotenv
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import time
-
+import base64
+import re
+import requests
+from langchain_core.messages import HumanMessage
 _ = load_dotenv(find_dotenv())
 
 model = ChatTongyi(
     streaming=True,
-    name="qwen-turbo"
+    name="qwen-vl-max"
 )
 
 # Define a new graph
@@ -17,20 +23,92 @@ workflow = StateGraph(state_schema=MessagesState)
 
 prompt_template = ChatPromptTemplate.from_messages(
     [
-        ("system","你是一位乐于助人的助手。尽你所能回答所有问题。"),
-        MessagesPlaceholder(variable_name="messages"),
+        ("system","你是一位乐于助人的HTML设计师，尽你所能为用户进行设计。您每次回答，要么只生成文本，要么只生成HTML代码，多余的部分不要生成，谢谢。"),
+        ("system","您每次回答，要么只生成文本，要么只生成HTML代码，多余的部分不要生成，谢谢！"),       MessagesPlaceholder(variable_name="messages"),
+        ("system","如果您已经生成了文字，那么就不要再生成HTML代码；如果您已经生成了HTML代码，那么就不要再生成其他文字消息。"),
+        ("system","用户给您发送的图片是参考图片，如果您收到了类似“生成图片”的信息，生成您设计的HTML代码即可。"),
+        ("system","您需要做的是生成对应文本或HTML代码，不是在互联网上寻找图片。"),
     ]
 )
 
-def call_model(state: MessagesState):
-    prompt = prompt_template.invoke(state)
-    response = model.invoke(prompt)
+from database.db import SessionLocal
+from database.crud import add_message_to_session
+
+def extract_html_only(text):
+    """提取第一个<html>、<table>或<img>标签及其内容"""
+    html_match = re.search(r'(<html[\s\S]*?</html>)', text, re.IGNORECASE)
+    if html_match:
+        return html_match.group(1)
+    table_match = re.search(r'(<table[\s\S]*?</table>)', text, re.IGNORECASE)
+    if table_match:
+        return table_match.group(1)
+    img_match = re.search(r'(<img[^>]*>)', text, re.IGNORECASE)
+    if img_match:
+        return img_match.group(1)
+    return None
+
+def extract_text_only(text):
+    """去除所有HTML标签，仅保留纯文本"""
+    return re.sub(r'<[^>]+>', '', text).strip()
+
+def call_model(state: MessagesState, session_id: int, only_html: bool = False):
+    db = SessionLocal()
+    try:
+        # 1. 取用户消息
+        user_msg = state["messages"][-1]
+        user_content = user_msg.get("content")
+        user_image = user_msg.get("image")
+        add_message_to_session(db, session_id, user_content, "user", user_image)
+
+        # 2. 生成助手回复
+        # 动态组装prompt
+        if only_html:
+            sys_msgs = [
+                ("system", "您是一位乐于助人的HTML设计师，只能生成HTML代码，不能生成任何解释、说明或文本。"),
+                ("system", "请严格只输出HTML代码，不要输出任何其他内容。"),
+            ]
+        else:
+            sys_msgs = [
+                ("system", "您是一位乐于助人的设计师，只能生成纯文本，不能生成任何HTML代码。"),
+                ("system", "请严格只输出文本，不要输出任何HTML代码或标签。"),
+            ]
+        # 构造多模态消息
+        msg_content = []
+        if user_content:
+            msg_content.append({"text": user_content})
+        if user_image:
+            # 若不是data:image/png;base64,开头，加上
+            if not user_image.startswith("data:image"):
+                user_image = f"data:image/png;base64,{user_image}"
+            msg_content.append({"image": user_image})
+        messages = []
+        for sys_msg in sys_msgs:
+            messages.append({"role": sys_msg[0], "content": sys_msg[1]})
+        messages.append(HumanMessage(content=msg_content))
+        response = model.invoke(messages)
+        assistant_content = response.content
+
+        # 3. 后处理：只保留HTML或只保留文本
+        html_code = extract_html_only(assistant_content)
+        text_only = extract_text_only(assistant_content)
+        if only_html:
+            if html_code:
+                add_message_to_session(db, session_id, None, "assistant", html_code)
+            else:
+                add_message_to_session(db, session_id, None, "assistant", assistant_content)
+        else:
+            if text_only:
+                add_message_to_session(db, session_id, text_only, "assistant", None)
+            else:
+                add_message_to_session(db, session_id, assistant_content, "assistant", None)
+    finally:
+        db.close()
     return {"messages": response}
 
 workflow.add_edge(START, "model")
 workflow.add_node("model", call_model)
 
-# 新增：全局 memory 字典
+#全局 memory 字典
 memory_dict = {}
 
 def get_app_for_session(session_id):
@@ -40,6 +118,23 @@ def get_app_for_session(session_id):
     memory = memory_dict[sid]
     return workflow.compile(checkpointer=memory)
 
+def image_file_to_base64(path):
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        print(f"读取图片失败: {e}")
+        return None
+
+def image_url_to_base64(url):
+    try:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        return base64.b64encode(resp.content).decode("utf-8")
+    except Exception as e:
+        print(f"下载图片失败: {e}")
+        return None
+
 config = {
     "configurable":{
         "session_id":time.time(),
@@ -47,3 +142,82 @@ config = {
     }
 }
 
+
+def run_chat_console():
+    session_id = input("请输入session_id（数字）：").strip()
+    if not session_id.isdigit():
+        print("session_id必须为数字！")
+        return
+    session_id = int(session_id)
+    app = get_app_for_session(session_id)
+    messages = []  # 用于存储本 session 的历史消息
+    while True:
+        user_message = input("请输入文本：").strip()
+        if not user_message:
+            print("已退出。")
+            break
+        img_path = input("请输入本地图片路径或图片URL（直接回车跳过）：").strip()
+        image_val = None
+        if img_path:
+            if img_path.startswith("http://") or img_path.startswith("https://"):
+                image_val = image_url_to_base64(img_path)
+            else:
+                image_val = image_file_to_base64(img_path)
+            if not image_val:
+                print("图片读取失败，将跳过图片。")
+        while True:
+            only_html_input = input("生成HTML代码输入1，生成文本输入0：").strip()
+            if only_html_input in ("0", "1"):
+                only_html = only_html_input == "1"
+                break
+            else:
+                print("请输入0或1。"); continue
+        # 追加本轮 user 消息
+        messages.append({"role": "user", "content": user_message, "image": image_val})
+        state = MessagesState(messages=messages)
+        result = call_model(state, session_id, only_html=only_html)
+        response = result["messages"]
+        # 追加本轮 assistant 消息
+        messages.append({"role": "assistant", "content": response.content, "image": None})
+        print(f"助手: {response.content}")
+
+def get_AI_response(session_id: int, flag: int, user_message: str, img_path: str = None):
+    """
+    单轮对话函数。参数：
+    - session_id: 会话ID（int）
+    - flag: 0=输出文本，1=输出HTML代码
+    - user_message: 用户输入的文字（不可为空）
+    - img_path: 图片路径或URL（可为空）
+    返回：模型输出内容
+    """
+    if not user_message or not user_message.strip():
+        print("用户输入不能为空。")
+        return None
+
+    image_val = None
+    if img_path:
+        if img_path.startswith("http://") or img_path.startswith("https://"):
+            image_val = image_url_to_base64(img_path)
+        else:
+            image_val = image_file_to_base64(img_path)
+        if not image_val:
+            print("图片读取失败，将跳过图片。")
+
+    # 构造消息
+    messages = [{"role": "user", "content": user_message, "image": image_val}]
+    state = MessagesState(messages=messages)
+    only_html = (flag == 1)
+    result = call_model(state, session_id, only_html=only_html)
+    response = result["messages"]
+    # 数据库写入已在 call_model 内部完成
+    return response.content
+
+if __name__ == "__main__":
+    # run_chat_console()
+    # 测试 get_AI_response
+    test_session_id = 54321
+    test_flag = 1  # 1=HTML, 0=文本
+    test_user_message = "请帮我设计一个日志表，具体可以参考这张图片"
+    test_img_path = r"C:\Users\68078\Pictures\Screenshots\704.png"  # 或者可以填写本地图片路径或图片URL
+    result = get_AI_response(test_session_id, test_flag, test_user_message, test_img_path)
+    print("AI输出:", result)
