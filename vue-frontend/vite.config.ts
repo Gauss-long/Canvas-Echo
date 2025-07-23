@@ -15,6 +15,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    maxHeaderSize: 5 * 1024 * 1024, // 增加请求头大小限制到2MB
     proxy: {
       '/db': 'http://localhost:8000',
       '/api': 'http://localhost:8000'

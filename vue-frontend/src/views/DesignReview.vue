@@ -746,19 +746,18 @@ textarea {
     }
   })
 
-  const fileToBase64 = (file: File): Promise<string> => {
+  const fileToDataURL = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader()
+    const reader = new FileReader();
     reader.onload = () => {
-      const result = reader.result as string
-      // 去掉 data:image/png;base64, 前缀，只保留纯 base64
-      const base64 = result.split(',')[1] || result
-      resolve(base64)
-    }
-    reader.onerror = (error) => reject(error)
-    reader.readAsDataURL(file)
-  })
-}
+      // 这里就是形如 "data:image/png;base64,AAAA..." 的完整 Data-URI
+      resolve(reader.result as string);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
 
 
   // 初始化
@@ -1011,7 +1010,7 @@ textarea {
   // 1. 生成图片 base64
   let imageUrl = null
   if (uploadedImage.value) {
-    imageUrl = await fileToBase64(uploadedImage.value)
+    imageUrl = await fileToDataURL(uploadedImage.value)
   }
 
   const max_id = await fetch('/db/get_max_message_id')
@@ -1101,7 +1100,7 @@ textarea {
 }
 
   // 新增：获取AI回复的函数
-  const getAIResponse = async (userMessage: string, flag: number, imgPath: string|null) => {
+  const getAIResponse = async (userMessage: string, flag: number, img_url: string|null) => {
     let aiText = ''
     try {
       const response = await fetch('/api/chat', {
@@ -1111,7 +1110,7 @@ textarea {
           session_id: currentSession.value.id,
           flag,
           user_message: userMessage,
-          img_base64: imgPath || ''
+          img_url: img_url || ''
         })
       })
       const data = await response.json()
@@ -1304,17 +1303,12 @@ const startGenerate = async () => {
     body: JSON.stringify({ session_id: currentSession.value.id })
   }).catch(err => console.error('标记生成阶段失败:', err))
 
-  /* ---------- 2. 找到最近一条用户消息 ---------- */
-  const lastUserMsg = [...currentSession.value.messages]
-    .reverse()
-    .find(m => m.role === 'user')
-  if (!lastUserMsg) return   // 理论上不会发生，防御一下
 
   /* ---------- 3. 请求 AI 生成 HTML ---------- */
   const aiContent = await getAIResponse(
-    lastUserMsg.content,
+    "",
     1,                   // flag=1 → 生成阶段
-    lastUserMsg.image
+    null
   )
 
   /* ---------- 4. 立即把 HTML 消息插入本地 ---------- */
