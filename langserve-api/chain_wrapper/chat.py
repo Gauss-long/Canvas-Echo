@@ -11,6 +11,7 @@ import base64
 import re
 import requests
 from langchain_core.messages import HumanMessage
+from database.function import get_messages_by_session_id
 _ = load_dotenv(find_dotenv())
 
 model = ChatTongyi(
@@ -54,13 +55,6 @@ def extract_text_only(text):
 def call_model(state: MessagesState, session_id: int, only_html: bool = False):
     db = SessionLocal()
     try:
-        # 1. 取用户消息
-        user_msg = state["messages"][-1]
-        user_content = user_msg.get("content")
-        user_image = user_msg.get("image")
-        add_message_to_session(db, session_id, user_content, "user", user_image)
-
-        # 2. 生成助手回复
         # 动态组装prompt
         if only_html:
             sys_msgs = [
@@ -72,35 +66,26 @@ def call_model(state: MessagesState, session_id: int, only_html: bool = False):
                 ("system", "您是一位乐于助人的设计师，只能生成纯文本，不能生成任何HTML代码。"),
                 ("system", "请严格只输出文本，不要输出任何HTML代码或标签。"),
             ]
-        # 构造多模态消息
-        msg_content = []
-        if user_content:
-            msg_content.append({"text": user_content})
-        if user_image:
-            # 若不是data:image/png;base64,开头，加上
-            if not user_image.startswith("data:image"):
-                user_image = f"data:image/png;base64,{user_image}"
-            msg_content.append({"image": user_image})
+        # 组装完整上下文
         messages = []
         for sys_msg in sys_msgs:
             messages.append({"role": sys_msg[0], "content": sys_msg[1]})
-        messages.append(HumanMessage(content=msg_content))
+        for msg in state["messages"]:
+            if msg["role"] == "user":
+                msg_content = []
+                if msg.get("content"):
+                    msg_content.append({"text": msg["content"]})
+                if msg.get("image"):
+                    msg_content.append({"image": msg["image"]})
+                messages.append(HumanMessage(content=msg_content))
+            elif msg["role"] == "assistant":
+                messages.append({"role": "assistant", "content": msg["content"]})
         response = model.invoke(messages)
         assistant_content = response.content
-
-        # 3. 后处理：只保留HTML或只保留文本
         html_code = extract_html_only(assistant_content)
         text_only = extract_text_only(assistant_content)
-        if only_html:
-            if html_code:
-                add_message_to_session(db, session_id, None, "assistant", html_code)
-            else:
-                add_message_to_session(db, session_id, None, "assistant", assistant_content)
-        else:
-            if text_only:
-                add_message_to_session(db, session_id, text_only, "assistant", None)
-            else:
-                add_message_to_session(db, session_id, assistant_content, "assistant", None)
+        # 删除：AI回复写入数据库逻辑
+        # 只返回内容，由前端负责写入数据库
     finally:
         db.close()
     return {"messages": response}
@@ -183,7 +168,7 @@ def run_chat_console():
 
 def get_AI_response(session_id: int, flag: int, user_message: str, img_path: str = None):
     """
-    单轮对话函数。参数：
+    支持多轮上下文的对话函数。参数：
     - session_id: 会话ID（int）
     - flag: 0=输出文本，1=输出HTML代码
     - user_message: 用户输入的文字（不可为空）
@@ -203,21 +188,25 @@ def get_AI_response(session_id: int, flag: int, user_message: str, img_path: str
         if not image_val:
             print("图片读取失败，将跳过图片。")
 
-    # 构造消息
-    messages = [{"role": "user", "content": user_message, "image": image_val}]
-    state = MessagesState(messages=messages)
-    only_html = (flag == 1)
-    result = call_model(state, session_id, only_html=only_html)
-    response = result["messages"]
-    # 数据库写入已在 call_model 内部完成
-    return response.content
-
-if __name__ == "__main__":
-    # run_chat_console()
-    # 测试 get_AI_response
-    test_session_id = 54321
-    test_flag = 1  # 1=HTML, 0=文本
-    test_user_message = "请帮我设计一个日志表，具体可以参考这张图片"
-    test_img_path = r"C:\Users\68078\Pictures\Screenshots\704.png"  # 或者可以填写本地图片路径或图片URL
-    result = get_AI_response(test_session_id, test_flag, test_user_message, test_img_path)
-    print("AI输出:", result)
+    # 1. 获取历史消息
+    db = SessionLocal()
+    try:
+        db_messages = get_messages_by_session_id(session_id)
+        # 只取最近10条
+        db_messages = db_messages[-10:]
+        messages = []
+        for m in db_messages:
+            messages.append({
+                "role": m.role,
+                "content": m.content,
+                "image": m.image if hasattr(m, 'image') else None
+            })
+        # 2. 追加本轮 user 消息
+        messages.append({"role": "user", "content": user_message, "image": image_val})
+        state = MessagesState(messages=messages)
+        only_html = (flag == 1)
+        result = call_model(state, session_id, only_html=only_html)
+        response = result["messages"]
+        return response.content
+    finally:
+        db.close()     

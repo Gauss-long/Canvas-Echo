@@ -22,6 +22,7 @@ class User(UserBase):
 
 class SessionBase(BaseModel):
     title: str
+    is_started: int=0
 
 class SessionCreate(SessionBase):
     pass

@@ -24,6 +24,7 @@ class Session(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     title = Column(String(100), default="New Session")
     created_at = Column(DateTime, default=datetime.utcnow)
+    is_started = Column(Integer, default=0)
 
     user = relationship("User", back_populates="sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")

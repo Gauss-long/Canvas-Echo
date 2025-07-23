@@ -94,10 +94,10 @@ def get_max_message_id_database(db: Session):
     return max_id
 
 def download_all_versions(db: Session, session_id: int):
-    """查找session下所有由assistant发送的image字段不为空的消息，返回数组"""
+    """查找session下所有由assistant发送的、content包含<html>和</html>的消息，返回数组"""
     messages = db.query(models.Message).filter(
         models.Message.session_id == session_id,
         models.Message.role == "assistant",
-        models.Message.image != ""
+        models.Message.content.contains("html")
     ).all()
     return messages

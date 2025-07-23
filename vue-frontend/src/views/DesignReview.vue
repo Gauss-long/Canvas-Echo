@@ -77,21 +77,34 @@
         <!-- 主聊天区域 -->
       <div class="chat-container">
         <div class="messages" ref="messagesContainer">
-          <div 
-            v-for="(msg, index) in currentSession.messages" 
-            :key="index" 
-            class="message"
-            :class="msg.role"
-          >
+          <template v-for="(msg, index) in currentSession.messages" :key="index">
+            <div class="message" :class="msg.role">
               <div class="avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
-            
-            <div class="content">
-              <div v-if="msg.role === 'user' && msg.image">
+              
+              <div class="content">
+                <div v-if="msg.role === 'user' && msg.image">
                   <img :src="msg.image" alt="上传的设计稿" class="design-image" />
+                </div>
+                <template v-if="msg.role === 'assistant' && isHtmlMessage(msg)">
+                  <iframe :srcdoc="msg.content"
+                          :key="currentVersionIndex + '-' + index"
+                          sandbox="allow-scripts allow-same-origin"
+                          style="width:200px;height:140px;border:none;border-radius:8px;"></iframe>
+                </template>
+                <template v-else>
+                  <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                </template>
+                <button
+                  v-if="shouldShowGenerateBtn(index)"
+                  @click="startGenerate"
+                  class="start-generate-btn"
+                >
+                  开始生成
+                </button>
+
               </div>
-              <div v-html="msg.content"></div>
             </div>
-          </div>
+          </template>
         </div>
 
           <!-- 输入区 -->
@@ -150,8 +163,9 @@
             <div v-if="displayMode === 'render'" class="render-box">
               <iframe
                 :srcdoc="htmlContent"
+                :key="currentVersionIndex"
                 sandbox="allow-scripts allow-same-origin"
-                style="width:100%;height:400px;border:none;border-radius:8px;overflow:auto;background:#fafbfc;"
+                style="width:100%;height:630px;border:none;border-radius:8px;overflow:auto;background:#fafbfc;"
               ></iframe>
             </div>
             <div v-else class="code-box">
@@ -163,7 +177,7 @@
             <div class="version-list">
               <button
                 v-for="(ver, idx) in versionHtmlList"
-                :key="ver.id"
+                :key="idx"
                 :class="{ active: idx === currentVersionIndex }"
                 @click="selectVersion(idx)"
               >{{ 'v' + (idx + 1) }}</button>
@@ -565,7 +579,7 @@ textarea {
 }
 .display-panel-content {
   width: 100%;
-  min-height: 400px;
+  min-height: 630px;
   background: #fafbfc;
   border: 1px solid #eee;
   border-radius: 8px;
@@ -643,6 +657,15 @@ textarea {
   90% { opacity: 0.95; transform: translate(-50%, -50%);}
   100% { opacity: 0; transform: translate(-50%, -60%);}
 }
+.markdown-body {
+  font-family: 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  line-height: 1.7;
+  color: #222;
+  background: none;
+  padding: 0;
+}
+.markdown-body h1, .markdown-body h2 { border-bottom: 1px solid #eee; }
+.markdown-body code { background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }
 </style>
 
 
@@ -657,8 +680,10 @@ textarea {
   import 'highlight.js/styles/atom-one-light.css' // 更花哨的高亮主题
   // @ts-ignore
   import { toPng } from 'html-to-image'
+  // 顶部引入 marked
+  import { marked } from 'marked'
 
-
+  const GREETING = '您好！请问您有什么设计需求?'
   const router = useRouter() // 获取路由实例
   const userStore = useUserStore()
 
@@ -678,6 +703,7 @@ textarea {
     title:string
     created_at:Date
     messages:Message[]
+    hasStartedGenerate?: boolean
   }
 
   // 响应式数据
@@ -699,7 +725,8 @@ textarea {
     user_id: 0,
     title: '新对话',
     created_at: new Date(),
-    messages: []
+    messages: [],
+    hasStartedGenerate: false
   })
 
   // 新增：侧边栏显示状态
@@ -758,7 +785,7 @@ textarea {
     }
   })
 
-  // 新增：从数据库加载历史对话
+  // 1. 修正 loadHistoryFromDatabase
   const loadHistoryFromDatabase = async () => {
   try {
     const res  = await fetch(`/db/history?username=${userStore.username}`)
@@ -770,6 +797,7 @@ textarea {
           user_id: session.user_id,
           title: session.title,
           created_at: new Date(session.created_at),
+          hasStartedGenerate: !!session.is_started, // 同步 is_started
           messages: session.messages.map((msg: any) => ({
             id: msg.id,
             session_id: msg.session_id,
@@ -837,6 +865,7 @@ textarea {
       image: '',
       timestamp: new Date()
     })
+
     try {
       const response = await fetch('/db/create_message', {
         method: 'POST',
@@ -859,7 +888,7 @@ textarea {
   }
 
 
-  // 新增：创建数据库会话
+  // 2. 修正 createSession，确保 hasStartedGenerate 从后端 is_started 字段同步
   const createSession = async (title: string): Promise<Session | null> => {
     if (!userStore.isLoggedIn || !userStore.userId) {
       return null
@@ -881,7 +910,8 @@ textarea {
           user_id: data.user_id,
           title: data.title,
           created_at: new Date(data.created_at), // 👈 注意要转成 Date 对象
-          messages: data.messages // 如果 messages 是 JSON 数组，也要确保结构正确
+          messages: data.messages, // 如果 messages 是 JSON 数组，也要确保结构正确
+          hasStartedGenerate: !!data.is_started // 同步 is_started
         }
         return session
       }
@@ -924,7 +954,8 @@ textarea {
         user_id: userStore.userId ?? 0,
         title: '新对话',
         created_at: new Date(),
-        messages: []
+        messages: [],
+        hasStartedGenerate: false
       }
       await nextTick()
       await startNewChat()
@@ -1020,8 +1051,9 @@ textarea {
   uploadedImage.value = null
 
   // 4. 获取AI回复
-  const aiContent = await getAIResponse(inputText)
-  const aiMsg = {
+  const flag = currentSession.value.hasStartedGenerate ? 1 : 0
+  const aiContent = await getAIResponse(inputText, flag, imageUrl)
+  const aiMsg: Message = {
     id: max_id_value + 2,
     session_id: currentSession.value.id,
     content: aiContent,
@@ -1030,57 +1062,55 @@ textarea {
     timestamp: new Date()
   }
   addMessage(aiMsg)
-
-  // 5. 写入数据库
+  let writeSuccess = false
   if (userStore.isLoggedIn && typeof currentSession.value.id === 'number') {
     try {
-      const response = await fetch('/db/create_message_pair', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id1: currentSession.value.id,
-          content1: userMsg.content,
-          role1: userMsg.role,
-          image1: userMsg.image,
-          session_id2: currentSession.value.id,
-          content2: aiMsg.content,
-          role2: aiMsg.role,
-          image2: aiMsg.image
+        const response = await fetch('/db/create_message_pair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id1: currentSession.value.id,
+            content1: userMsg.content,
+            role1: userMsg.role,
+            image1: userMsg.image,
+            session_id2: currentSession.value.id,
+            content2: aiMsg.content,
+            role2: aiMsg.role,
+            image2: aiMsg.image
+          })
         })
-      })
-      const data = await response.json()
-      if (!data.success) {
-        console.error('写入数据库失败:', data.message)
-      }
+        const data = await response.json()
+        writeSuccess = !!data.success
+        if (!data.success) {
+          console.error('写入数据库失败:', data.message)
+        }
+       
     } catch (error) {
       console.error('写入数据库请求失败:', error)
     }
   }
+  // 只有数据库写入成功后再拉取版本
+  if (writeSuccess) {
+    await updateDisplayPanelVersions(currentSession.value.id)
+  }
 }
 
   // 新增：获取AI回复的函数
-  const getAIResponse = async (userMessage: string) => {
+  const getAIResponse = async (userMessage: string, flag: number, imgPath: string|null) => {
     let aiText = ''
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: userMessage, session_id: currentSession.value.id }) // 修复：加上 session_id
+        body: JSON.stringify({
+          session_id: currentSession.value.id,
+          flag,
+          user_message: userMessage,
+          img_path: imgPath || ''
+        })
       })
-      const reader = response.body?.getReader()
-      if (reader) {
-        let decoder = new TextDecoder('utf-8')
-        let done = false
-        while (!done) {
-          const { value, done: doneReading } = await reader.read()
-          done = doneReading
-          if (value) {
-            aiText += decoder.decode(value, { stream: true })
-          }
-        }
-      } else {
-        aiText = await response.text()
-      }
+      const data = await response.json()
+      aiText = data.message || ''
     } catch (e) {
       aiText = '请求失败，请稍后重试'
     }
@@ -1088,6 +1118,7 @@ textarea {
   }
 
 
+  // 3. 修正 loadSession，切换会话时同步 hasStartedGenerate 字段
   const loadSession = (sessionId: number) => {
     const session = historySessions.value.find(s => s.id === sessionId)
     if (!session) {
@@ -1095,7 +1126,8 @@ textarea {
       return
     }
     currentSessionId.value = sessionId
-    currentSession.value   = { ...session }
+    // 保证 hasStartedGenerate 字段同步
+    currentSession.value = { ...session, hasStartedGenerate: session.hasStartedGenerate }
     updateDisplayPanelVersions(sessionId)
 
     nextTick(() => {
@@ -1145,20 +1177,25 @@ textarea {
   }
 
   const displayMode = ref<'render' | 'code'>('render')
-  const versionHtmlList = ref<{id: number, image: string}[]>([])
+  // 1. 修改 versionHtmlList 类型为 string[]
+  const versionHtmlList = ref<string[]>([])
   const currentVersionIndex = ref(0)
+  
 
+  // 2. updateDisplayPanelVersions 直接赋值字符串数组
   async function updateDisplayPanelVersions(sessionId: number) {
     const res = await fetch(`/db/get_all_versions?session_id=${sessionId}`)
     const data = await res.json()
     if (data.success && Array.isArray(data.versions)) {
-      versionHtmlList.value = data.versions
-      currentVersionIndex.value = 0
+      versionHtmlList.value = data.versions // 直接是字符串数组
+      //....................................
+      console.log('[debug] versions length →', versionHtmlList.value.length)
+
+      currentVersionIndex.value = versionHtmlList.value.length - 1
     } else {
       versionHtmlList.value = []
-      currentVersionIndex.value = 0
+      currentVersionIndex.value = -1
     }
-    //展示区切换成预览模式
     displayMode.value = 'render'
     await nextTick()
   }
@@ -1167,8 +1204,11 @@ textarea {
     currentVersionIndex.value = idx
   }
 
+  // 3. 版本按钮渲染
+  // <button v-for="(ver, idx) in versionHtmlList" :key="idx" ... >
+  // 4. htmlContent 计算属性
   const htmlContent = computed(() => {
-    return versionHtmlList.value[currentVersionIndex.value]?.image || ''
+    return versionHtmlList.value[currentVersionIndex.value] || ''
   })
 
   const codeBoxRef = ref<HTMLElement | null>(null)
@@ -1225,5 +1265,103 @@ textarea {
       highlightCode()
     })
   })
+
+  function shouldShowGenerateBtn(idx: number) {
+    if (currentSession.value.hasStartedGenerate) return false
+
+    const msgs = currentSession.value.messages
+
+    // 收集所有「非问候语」的 assistant‑text 消息下标
+    const assistantTextIdxs = msgs
+      .map((m, i) =>
+        (m.role === 'assistant' &&
+        m.content.trim() !== GREETING) ? i : -1)
+      .filter(i => i !== -1)
+
+    if (!assistantTextIdxs.length) return false       // 目前还没有可点击的回复
+
+    // 只有最新一条符合条件的 assistant‑text 才显示按钮
+    return idx === assistantTextIdxs[assistantTextIdxs.length - 1]
+  }
+
+
+
+  // 6. “开始生成”按钮逻辑（全量替换）
+const startGenerate = async () => {
+  /* ---------- 1. 本地与后端都标记已进入生成阶段 ---------- */
+  currentSession.value.hasStartedGenerate = true
+  saveSessions()                       // 写入 localStorage
+
+  // 持久化到数据库（后台实现：UPDATE sessions SET hasStartedGenerate = 1 WHERE id = ?）
+  fetch('/db/mark_started', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: currentSession.value.id })
+  }).catch(err => console.error('标记生成阶段失败:', err))
+
+  /* ---------- 2. 找到最近一条用户消息 ---------- */
+  const lastUserMsg = [...currentSession.value.messages]
+    .reverse()
+    .find(m => m.role === 'user')
+  if (!lastUserMsg) return   // 理论上不会发生，防御一下
+
+  /* ---------- 3. 请求 AI 生成 HTML ---------- */
+  const aiContent = await getAIResponse(
+    lastUserMsg.content,
+    1,                   // flag=1 → 生成阶段
+    lastUserMsg.image
+  )
+
+  /* ---------- 4. 立即把 HTML 消息插入本地 ---------- */
+  const aiMsg: Message = {
+    id: Date.now(),       // 前端临时 ID，后端会重新分配
+    session_id: currentSession.value.id,
+    content: aiContent,
+    image: '',
+    role: 'assistant',
+    timestamp: new Date()
+  }
+  addMessage(aiMsg)
+  let writeSuccess = false
+  if (userStore.isLoggedIn && typeof currentSession.value.id === 'number') {
+    try {
+      const res = await fetch('/db/create_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSession.value.id,
+          content: aiContent,
+          role: 'assistant',
+          image: '',
+          type: 'html'            // 建议后端也存这个字段
+        })
+      })
+      const data = await res.json()
+      writeSuccess = !!data.success
+      if (!data.success) {
+        console.error('写入数据库失败:', data.message)
+      }
+    } catch (err) {
+      console.error('写入数据库请求失败:', err)
+    }
+  }
+  // 只有数据库写入成功后再拉取版本
+  if (writeSuccess) {
+    await updateDisplayPanelVersions(currentSession.value.id)
+  }
+}
+
+  // 1. 添加 isHtmlMessage 辅助函数
+  function isHtmlMessage(msg: Message): boolean {
+    return typeof msg.content === 'string' && /<html[\s\S]*<\/html>/i.test(msg.content)
+  }
+
+  // 渲染 markdown 的辅助函数
+  function renderMarkdown(content: string) {
+    // 只对非 HTML 消息做 markdown 渲染
+    if (isHtmlMessage({ content, id: 0, session_id: 0, image: '', role: '', timestamp: new Date() })) return content
+    return marked.parse(content || '')
+  }
+
 
 </script>

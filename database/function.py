@@ -63,6 +63,7 @@ def get_user_history(username: str):
             "user_id": user_id,
             "title": s.title,
             "created_at": s.created_at,
+            "is_started": getattr(s, 'is_started', 0),  # 新增
             "messages": [
                 {
                     "id": m.id,
@@ -96,3 +97,16 @@ def update_session_title(session_id: int, title: str):
 def get_all_versions(session_id: int):
     db = next(get_db())
     return download_all_versions(db, session_id)
+
+def get_messages_by_session_id(session_id: int):
+    db = next(get_db())
+    return get_session_messages(db, session_id)
+
+def mark_started(session_id: int):
+    db = next(get_db())
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if session:
+        session.is_started = 1
+        db.commit()
+        return True
+    return False

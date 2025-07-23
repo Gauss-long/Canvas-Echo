@@ -80,6 +80,9 @@ class UpdateSessionTitleRequest(BaseModel):
     session_id: int
     title: str
 
+class MarkStartedRequest(BaseModel):
+       session_id: int
+
 async def generate_response(content: str):
     """生成模拟的AI回复"""
     # 模拟AI思考过程
@@ -102,7 +105,7 @@ async def generate_response(content: str):
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """调用真实大模型的API"""
-    print(f"收到聊天请求：{request.content}，session_id={request.session_id}")
+    print(f"收到聊天请求：{request.user_message}，session_id={request.session_id}")
     return {"success": True, "message": chat_chain.get_AI_response(request.session_id, request.flag, request.user_message, request.img_path)}
 
 @app.post("/api/title")
@@ -132,7 +135,7 @@ def create_session_api(request: CreateSessionRequest):
     session = db_func.create_session(request.user_id, request.title)
     if session:
         return {"success": True, "session_id": session.id,"user_id": session.user_id,"title": session.title,
-        "created_at": session.created_at,"messages":[]}
+        "created_at": session.created_at,"messages":[],"is_started": getattr(session, 'is_started', 0)  }
     else:
         return {"success": False, "message": "创建会话失败"}
 
@@ -179,7 +182,16 @@ def update_session_title_api(request: UpdateSessionTitleRequest):
 @app.get("/db/get_all_versions")
 def get_all_versions_api(session_id: int):
     versions = db_func.get_all_versions(session_id)
-    return {"success": True, "versions": versions}
+    # 只返回 content 字段组成的数组
+    html_list = [v.content for v in versions]
+    #print(html_list)
+    return {"success": True, "versions": html_list}
+
+@app.post("/db/mark_started")
+def mark_started_api(request: MarkStartedRequest):
+    db_func.mark_started(request.session_id)
+    return {"success": True}
+
 
 
 @app.get("/")
