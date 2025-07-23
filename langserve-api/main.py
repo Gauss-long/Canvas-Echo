@@ -47,7 +47,7 @@ class ChatRequest(BaseModel):
     session_id: int  # 新增字段
     flag: int
     user_message: str
-    img_path: str
+    img_base64: str
     
     
 
@@ -106,7 +106,7 @@ async def generate_response(content: str):
 async def chat(request: ChatRequest):
     """调用真实大模型的API"""
     print(f"收到聊天请求：{request.user_message}，session_id={request.session_id}")
-    return {"success": True, "message": chat_chain.get_AI_response(request.session_id, request.flag, request.user_message, request.img_path)}
+    return {"success": True, "message": chat_chain.get_AI_response(request.session_id, request.flag, request.user_message, request.img_base64)}
 
 @app.post("/api/title")
 async def title(request: Input):

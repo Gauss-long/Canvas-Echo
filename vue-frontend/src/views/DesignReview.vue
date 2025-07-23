@@ -80,13 +80,13 @@
           <template v-for="(msg, index) in currentSession.messages" :key="index">
             <div class="message" :class="msg.role">
               <div class="avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
-              
-              <div class="content">
-                <div v-if="msg.role === 'user' && msg.image">
+            
+            <div class="content">
+              <div v-if="msg.role === 'user' && msg.image">
                   <img :src="msg.image" alt="上传的设计稿" class="design-image" />
-                </div>
+              </div>
                 <template v-if="msg.role === 'assistant' && isHtmlMessage(msg)">
-                  <iframe :srcdoc="msg.content"
+                  <iframe :srcdoc="normalizeHtml(msg.content)"
                           :key="currentVersionIndex + '-' + index"
                           sandbox="allow-scripts allow-same-origin"
                           style="width:200px;height:140px;border:none;border-radius:8px;"></iframe>
@@ -102,8 +102,8 @@
                   开始生成
                 </button>
 
+                </div>
               </div>
-            </div>
           </template>
         </div>
 
@@ -162,14 +162,14 @@
             <div v-if="copyTip" class="copy-toast-center">已复制到剪贴板</div>
             <div v-if="displayMode === 'render'" class="render-box">
               <iframe
-                :srcdoc="htmlContent"
+                :srcdoc="normalizeHtml(htmlContent)"
                 :key="currentVersionIndex"
                 sandbox="allow-scripts allow-same-origin"
                 style="width:100%;height:630px;border:none;border-radius:8px;overflow:auto;background:#fafbfc;"
               ></iframe>
             </div>
             <div v-else class="code-box">
-              <pre><code ref="codeBoxRef" class="html">{{ htmlContent }}</code></pre>
+              <pre><code ref="codeBoxRef" class="html">{{ normalizeHtml(htmlContent) }}</code></pre>
             </div>
           </div>
           <!-- 展示区底部版本管理区 -->
@@ -749,7 +749,12 @@ textarea {
   const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
+    reader.onload = () => {
+      const result = reader.result as string
+      // 去掉 data:image/png;base64, 前缀，只保留纯 base64
+      const base64 = result.split(',')[1] || result
+      resolve(base64)
+    }
     reader.onerror = (error) => reject(error)
     reader.readAsDataURL(file)
   })
@@ -1065,25 +1070,25 @@ textarea {
   let writeSuccess = false
   if (userStore.isLoggedIn && typeof currentSession.value.id === 'number') {
     try {
-        const response = await fetch('/db/create_message_pair', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id1: currentSession.value.id,
-            content1: userMsg.content,
-            role1: userMsg.role,
-            image1: userMsg.image,
-            session_id2: currentSession.value.id,
-            content2: aiMsg.content,
-            role2: aiMsg.role,
-            image2: aiMsg.image
-          })
+      const response = await fetch('/db/create_message_pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id1: currentSession.value.id,
+          content1: userMsg.content,
+          role1: userMsg.role,
+          image1: userMsg.image,
+          session_id2: currentSession.value.id,
+          content2: aiMsg.content,
+          role2: aiMsg.role,
+          image2: aiMsg.image
         })
-        const data = await response.json()
+      })
+      const data = await response.json()
         writeSuccess = !!data.success
-        if (!data.success) {
-          console.error('写入数据库失败:', data.message)
-        }
+      if (!data.success) {
+        console.error('写入数据库失败:', data.message)
+      }
        
     } catch (error) {
       console.error('写入数据库请求失败:', error)
@@ -1106,7 +1111,7 @@ textarea {
           session_id: currentSession.value.id,
           flag,
           user_message: userMessage,
-          img_path: imgPath || ''
+          img_base64: imgPath || ''
         })
       })
       const data = await response.json()
@@ -1360,7 +1365,12 @@ const startGenerate = async () => {
   function renderMarkdown(content: string) {
     // 只对非 HTML 消息做 markdown 渲染
     if (isHtmlMessage({ content, id: 0, session_id: 0, image: '', role: '', timestamp: new Date() })) return content
-    return marked.parse(content || '')
+    return marked.parse(normalizeHtml(content || ''))
+  }
+
+  // 新增：HTML代码去除多余转义换行符
+  function normalizeHtml(html: string) {
+    return html.replace(/\\n/g, '\n');
   }
 
 
